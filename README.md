@@ -18,10 +18,7 @@ make env                 # create .env from .env.example
 make ingest              # load testdata/handbook into Postgres
 make run-dev             # retrieval-only server on :8080, no LLM key needed
 make smoke               # end-to-end checks against the running server
-make web                 # Yew UI on http://localhost:8081 (proxies /v1 to :8080)
 ```
-
-The web UI needs `trunk` and the `wasm32-unknown-unknown` target: `cargo install trunk --version 0.22.2 --locked` and `rustup target add wasm32-unknown-unknown`.
 
 Local defaults use the Unix socket and your OS user: `DATABASE_URL=postgres:///handbook` and `TEST_DATABASE_URL=postgres:///handbook_test`. Override them in `.env`.
 
@@ -120,13 +117,12 @@ The golden set lives in [`testdata/golden/v1.json`](testdata/golden/v1.json). Th
 | `internal/auth`, `internal/httpapi` | Bearer auth and the HTTP handlers |
 | `internal/admin` | Admin routes, the signed webhook, and analytics |
 | `internal/slack` | Socket Mode listener, the worker pool, and Slack replies |
-| `web/` | Browser UI in Yew (Rust → WASM), streaming answers. `make web-test`, `make web` |
 | `spec.md`, `proposal.md` | Acceptance criteria and the design reference |
 
 ## Status
 
-Built: ingestion (queue, background worker, admin runs, signed webhook), hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, admin analytics, a Slack bot with ack-then-answer threads, and a Yew web UI that streams answers.
+Built: ingestion (queue, background worker, admin runs, signed webhook), hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, admin analytics, and a Slack bot with ack-then-answer threads.
 
 Verified: unit and race tests for every package, DB-backed store tests, the privacy gate, the golden eval against the Anthropic API (7/7), the smoke script, and live checks of the admin routes, the signed webhook, and the SSE stream. The Slack bot works live over Socket Mode: it answers mentions in a channel with cited answers, declines questions the handbook doesn't cover, and routes sensitive questions to a human.
 
-Not verified: the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.
+Not verified: a live test against a real identity provider. Not built: a local Ollama generator tier.

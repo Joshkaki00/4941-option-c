@@ -203,7 +203,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 | LLM (primary) | Anthropic API via the official Go SDK; start with a Sonnet-class model, test a Haiku-class model on the golden set |
 | Embeddings | Open-weight model (e.g. bge-m3 or nomic-embed-text) so the same vectors can be produced hosted or locally |
 | Reranker | Skip in v1; add a hosted rerank endpoint if evals show a gain |
-| Front end | Slack bot first; browser UI in Yew (Rust → WASM, `web/`), a static client over the same `/v1` API |
+| Front end | Slack bot (Socket Mode) |
 | Doc parsing | Go for Markdown/HTML/DOCX; a small Python step for messy PDFs (offline only) |
 | Hosting | **Option B (recommended):** small container host plus managed Postgres with backups.
 

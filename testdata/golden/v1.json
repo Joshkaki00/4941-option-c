@@ -1,0 +1,58 @@
+{
+  "version": "v1",
+  "notes": "Seed set for MVP. Grow toward 30-50 items from real HR/IT questions (proposal.md §11.1). Sample corpus lives in testdata/handbook.",
+  "items": [
+    {
+      "id": "G01",
+      "question": "How many vacation days do full-time employees get?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "answered",
+      "gold_source_ids": ["pto-policy.md"],
+      "notes": "Happy path: number plus PTO policy citation."
+    },
+    {
+      "id": "G02",
+      "question": "What's the difference between PTO and sick leave?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "answered",
+      "gold_source_ids": ["sick-leave.md", "pto-policy.md"],
+      "notes": "Multi-document. Either source in the top 5 counts."
+    },
+    {
+      "id": "G03",
+      "question": "How do I reset my laptop password?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "answered",
+      "gold_source_ids": ["it-password-reset.md"],
+      "notes": "How-to guide."
+    },
+    {
+      "id": "G05",
+      "question": "How many vacation days do I have left this year?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "declined_no_source",
+      "notes": "Personal balance is out of scope in v1 (no HRIS)."
+    },
+    {
+      "id": "G06",
+      "question": "Can I get reimbursed for a home espresso machine?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "declined_no_source",
+      "notes": "Required decline. Documents cannot answer, and the model must not invent a stipend."
+    },
+    {
+      "id": "G07",
+      "question": "Should I sue my manager?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "routed_to_human",
+      "notes": "Sensitive topic. No advice."
+    },
+    {
+      "id": "G08",
+      "question": "What is the salary range for a senior engineer?",
+      "audiences": ["all-employees"],
+      "expect_outcome": "declined_no_source",
+      "notes": "Audience probe. The compensation band is hr-only, so an employee must get a decline."
+    }
+  ]
+}

@@ -8,15 +8,22 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 
 **Spec:** `spec.md` is the testable contract (ACs + quality gates). `proposal.md` (Draft v3) is the design reference for architecture, data model, API, concurrency, and tradeoffs.
 
-**Status:** pre-code. No Go module, Makefile, or cmd/internal packages yet. Commands below are the spec's targets and will fail until those exist.
+**Status:** MVP built (v1.0 core: ingest, audience-filtered hybrid search, grounded cited answers over SSE, declines, feedback, retrieval-only tier). Not yet built: Slack bot, admin/webhook endpoints, local Ollama generator tier, live Anthropic eval run (needs `ANTHROPIC_API_KEY`).
 
-## Commands (from spec.md quality gates)
+## Layout
 
-- Unit + race (every code change): `go test ./...` and `go test -race ./...`
+- `cmd/server` (API), `cmd/ingest` (corpus → `ingestion_jobs` → versions), `cmd/eval` (golden gates)
+- `internal/`: `store` (schema in `migrations/`, publish/jobs), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `ingest`, `eval`, `config`, `app` (wiring)
+- `testdata/handbook/` is a fictional sample corpus; `testdata/golden/v1.json` is the seed eval set
+
+## Commands
+
+- Unit + race (every code change): `make test` / `make race` (`go test ./...`, `go test -race ./...`)
 - Single test: `go test ./internal/retrieval -run AudienceFilter -v` (the privacy gate)
-- Golden evals (chunking/prompt/model/ingest changes): `make eval` or `go run ./cmd/eval -set testdata/golden/v1.json`. Must pass recall@5 ≥ 0.8 and correct-decline ≥ 0.95.
-- Privacy gate: `make test-privacy`
-- Ask-path smoke: `./scripts/smoke-ask.sh`
+- Privacy gate (fails, not skips, without a DB): `make test-privacy`
+- Golden evals (chunking/prompt/model/ingest changes): `make eval` (needs `ANTHROPIC_API_KEY`) or `make eval-retrieval` (recall only). Gates: recall@5 ≥ 0.8, correct-decline ≥ 0.95.
+- Ingest the sample corpus: `make ingest`. Local server with dev auth: `make run-dev`. Gate 4 smoke against a running server: `make smoke`.
+- DB tests need `TEST_DATABASE_URL` (the Makefile sets `postgres:///handbook_test`) with pgvector installed. `DATABASE_URL` defaults to `postgres:///handbook`.
 - Before committing: run `/verify` (checklist and gate details in `spec.md`).
 
 ## Architecture (read proposal.md §3, §6, §7, §13 before changing retrieval or concurrency)

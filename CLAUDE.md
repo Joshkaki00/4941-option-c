@@ -8,12 +8,12 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 
 **Spec:** `spec.md` is the testable contract (ACs + quality gates). `proposal.md` (Draft v3) is the design reference for architecture, data model, API, concurrency, and tradeoffs.
 
-**Status:** MVP built (v1.0 core: ingest, audience-filtered hybrid search, grounded cited answers over SSE, declines, feedback, retrieval-only tier). Yew browser UI built in `web/` (token sign-in, answers with sources, feedback; not yet streaming). Not yet built: Slack bot, admin/webhook endpoints, local Ollama generator tier.
+**Status:** v1 built: ingest queue with background worker, audience-filtered hybrid search, grounded cited answers over SSE, declines, feedback, retrieval-only tier, admin routes and signed webhook, Slack bot (`internal/slack`), and a streaming Yew UI (`web/`). Not verified live: Slack in a real workspace, the UI in a browser, SSO against a real IdP. Not built: local Ollama generator tier.
 
 ## Layout
 
 - `cmd/server` (API), `cmd/ingest` (corpus → `ingestion_jobs` → versions), `cmd/eval` (golden gates)
-- `internal/`: `store` (schema in `migrations/`, publish/jobs), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `ingest`, `eval`, `config`, `app` (wiring)
+- `internal/`: `store` (schema in `migrations/`, publish/jobs, admin queries), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `admin` (`/v1/admin`, signed webhook), `slack` (events, signature, worker pool), `ingest`, `eval`, `config`, `app` (wiring)
 - `web/`: Yew (Rust → WASM) browser UI. `model.rs` holds the API types and pure helpers (host-testable); `main.rs` is the Yew app; `Trunk.toml` proxies `/v1` to the Go API.
 - `testdata/handbook/` is a fictional sample corpus; `testdata/golden/v1.json` is the seed eval set
 

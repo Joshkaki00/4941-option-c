@@ -1,4 +1,4 @@
-// Command server runs the Ask the Handbook HTTP API.
+// Command server runs the Ask the Handbook HTTP API and its ingestion worker.
 package main
 
 import (
@@ -11,9 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Joshkaki00/4941-option-c/internal/admin"
 	"github.com/Joshkaki00/4941-option-c/internal/app"
 	"github.com/Joshkaki00/4941-option-c/internal/config"
 	"github.com/Joshkaki00/4941-option-c/internal/httpapi"
+	"github.com/Joshkaki00/4941-option-c/internal/ingest"
+	"github.com/Joshkaki00/4941-option-c/internal/slack"
 )
 
 func main() {
@@ -54,6 +57,19 @@ func run() error {
 		rt.Logger.Warn("dev auth enabled: static tokens accepted; do not run this in production")
 	}
 
+	// One ingestion worker goroutine. It is cancelled and joined before the store closes.
+	worker := &ingest.Worker{Store: rt.Store, Embedder: rt.Embedder, Root: cfg.IngestRoot, Logger: rt.Logger}
+	loopCtx, cancelLoop := context.WithCancel(ctx)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		runIngestLoop(loopCtx, worker, cfg.IngestPoll, rt.Logger)
+	}()
+	defer func() {
+		cancelLoop()
+		<-loopDone
+	}()
+
 	api := httpapi.New(httpapi.Deps{
 		Verifier:      verifier,
 		Store:         rt.Store,
@@ -62,10 +78,44 @@ func run() error {
 		Logger:        rt.Logger,
 		MaxConcurrent: cfg.MaxConcurrent,
 	})
+	adm := admin.New(admin.Deps{
+		Verifier: verifier,
+		Store:    rt.Store,
+		EnqueueCorpus: func(ctx context.Context) (int, error) {
+			return ingest.EnqueueDir(ctx, rt.Store, cfg.IngestRoot)
+		},
+		WebhookSecret: cfg.WebhookSecret,
+		Logger:        rt.Logger,
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/v1/admin/", adm.Handler())
+	mux.Handle("/", api.Handler())
+
+	if cfg.SlackBotToken != "" {
+		// Slack workers get their own context so they stop before the store closes.
+		bot := slack.NewBot(slack.Config{
+			SigningSecret: cfg.SlackSigningSecret,
+			BotUserID:     cfg.SlackBotUserID,
+			Workers:       cfg.SlackWorkers,
+			QueueSize:     cfg.SlackQueue,
+		}, slack.NewAPIClient(cfg.SlackBotToken), rt.Store, rt.Answers, rt.Logger)
+		slackCtx, cancelSlack := context.WithCancel(ctx)
+		slackDone := make(chan struct{})
+		go func() {
+			defer close(slackDone)
+			bot.Run(slackCtx)
+		}()
+		defer func() {
+			cancelSlack()
+			<-slackDone
+		}()
+		mux.Handle("/slack/", bot.Handler())
+		rt.Logger.Info("slack bot enabled", "workers", cfg.SlackWorkers, "queue", cfg.SlackQueue)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		// No global WriteTimeout: SSE responses set their own write deadline.
@@ -90,4 +140,22 @@ func run() error {
 	defer cancel()
 	rt.Logger.Info("shutting down")
 	return srv.Shutdown(shutdownCtx)
+}
+
+// runIngestLoop drains the ingestion queue on every tick until ctx is cancelled.
+func runIngestLoop(ctx context.Context, w *ingest.Worker, every time.Duration, log interface {
+	Error(msg string, args ...any)
+}) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, _, err := w.Drain(ctx); err != nil && ctx.Err() == nil {
+				log.Error("ingest drain failed", "err", err)
+			}
+		}
+	}
 }

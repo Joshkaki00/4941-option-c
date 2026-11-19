@@ -14,26 +14,34 @@ import (
 
 // Config is the validated runtime configuration.
 type Config struct {
-	DatabaseURL     string
-	DBMaxConns      int32
-	ListenAddr      string
-	MaxConcurrent   int
-	EmbedProvider   string // ollama | hash
-	OllamaURL       string
-	EmbedModel      string
-	EmbedDim        int
-	LLMProvider     string // anthropic | none
-	AnthropicKey    string
-	AnthropicModel  string
-	MaxTokens       int64
-	OIDCIssuer      string
-	OIDCClientID    string
-	GroupsClaim     string
-	Tokens          auth.StaticTokens // dev only; empty when OIDC is configured
-	TopK            int
-	MinSimilarity   float64
-	RetrieveTimeout time.Duration
-	HandoffText     string
+	DatabaseURL        string
+	DBMaxConns         int32
+	ListenAddr         string
+	MaxConcurrent      int
+	EmbedProvider      string // ollama | hash
+	OllamaURL          string
+	EmbedModel         string
+	EmbedDim           int
+	LLMProvider        string // anthropic | none
+	AnthropicKey       string
+	AnthropicModel     string
+	MaxTokens          int64
+	OIDCIssuer         string
+	OIDCClientID       string
+	GroupsClaim        string
+	Tokens             auth.StaticTokens // dev only; empty when OIDC is configured
+	TopK               int
+	MinSimilarity      float64
+	RetrieveTimeout    time.Duration
+	HandoffText        string
+	WebhookSecret      []byte        // HMAC key for source-changed webhooks; empty disables them
+	IngestRoot         string        // corpus directory the ingest worker reads from
+	IngestPoll         time.Duration // how often the server drains the ingestion queue
+	SlackBotToken      string        // empty disables the Slack bot
+	SlackSigningSecret string
+	SlackBotUserID     string
+	SlackWorkers       int // concurrent Slack answers
+	SlackQueue         int // pending Slack questions before "busy" replies
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -94,6 +102,43 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("config: RETRIEVE_TIMEOUT: %w", err)
 	}
 	cfg.RetrieveTimeout = timeout
+
+	cfg.IngestRoot = get("INGEST_ROOT", "testdata/handbook")
+	poll, err := time.ParseDuration(get("INGEST_POLL_INTERVAL", "30s"))
+	if err != nil || poll <= 0 {
+		return Config{}, fmt.Errorf("config: INGEST_POLL_INTERVAL must be a positive duration, got %q", get("INGEST_POLL_INTERVAL", ""))
+	}
+	cfg.IngestPoll = poll
+	if secret := get("WEBHOOK_SECRET", ""); secret != "" {
+		if len(secret) < 32 {
+			return Config{}, errors.New("config: WEBHOOK_SECRET must be at least 32 characters")
+		}
+		cfg.WebhookSecret = []byte(secret)
+	}
+
+	cfg.SlackBotToken = get("SLACK_BOT_TOKEN", "")
+	cfg.SlackSigningSecret = get("SLACK_SIGNING_SECRET", "")
+	cfg.SlackBotUserID = get("SLACK_BOT_USER_ID", "")
+	if cfg.SlackWorkers, err = intEnv(get, "SLACK_WORKERS", 2); err != nil {
+		return Config{}, err
+	}
+	if cfg.SlackQueue, err = intEnv(get, "SLACK_QUEUE", 16); err != nil {
+		return Config{}, err
+	}
+	if cfg.SlackWorkers < 1 {
+		return Config{}, errors.New("config: SLACK_WORKERS must be at least 1")
+	}
+	if cfg.SlackQueue < 1 {
+		return Config{}, errors.New("config: SLACK_QUEUE must be at least 1")
+	}
+	if cfg.SlackBotToken != "" {
+		if cfg.SlackSigningSecret == "" {
+			return Config{}, errors.New("config: SLACK_BOT_TOKEN requires SLACK_SIGNING_SECRET")
+		}
+		if cfg.SlackBotUserID == "" {
+			return Config{}, errors.New("config: SLACK_BOT_TOKEN requires SLACK_BOT_USER_ID")
+		}
+	}
 
 	switch cfg.EmbedProvider {
 	case "ollama", "hash":

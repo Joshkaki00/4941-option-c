@@ -41,6 +41,10 @@ Settings come from environment variables. The Go binaries load `.env` without ov
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID` | Production SSO |
 | `DEV_AUTH_TOKENS` | Local-only static tokens: `token\|subject\|group1,group2;...` |
 | `MIN_SIMILARITY`, `TOP_K`, `RETRIEVE_TIMEOUT` | Retrieval tuning |
+| `WEBHOOK_SECRET` | HMAC key for the source-changed webhook (32+ characters). Empty disables it. |
+| `INGEST_ROOT`, `INGEST_POLL_INTERVAL` | Corpus directory and how often the server drains the ingestion queue |
+| `SLACK_BOT_TOKEN` | Enables the Slack bot. Requires `SLACK_SIGNING_SECRET` and `SLACK_BOT_USER_ID`. |
+| `SLACK_WORKERS`, `SLACK_QUEUE` | Concurrent Slack answers and the pending-question limit before "busy" replies |
 
 The server refuses to start without either `OIDC_ISSUER` or `DEV_AUTH_TOKENS`. Identity always comes from the token, never from request bodies.
 
@@ -57,8 +61,30 @@ All `/v1` routes require `Authorization: Bearer <token>`.
 | `POST` | `/v1/conversations/{id}/messages` | Ask a question. Body: `{"content": "...", "stream": true}`. With `stream: true` the response is Server-Sent Events (`token`, then `citations`, then `done`). Otherwise it's a single JSON answer. |
 | `GET` | `/v1/chunks/{id}` | Preview one passage (404 unknown, 403 not in your audiences) |
 | `POST` | `/v1/messages/{id}/feedback` | Rate an answer: `{"rating": 1 or -1, "comment": "..."}` |
+| `POST` | `/v1/admin/ingestion/runs` | Admin. Queue every corpus file for ingestion (202, `{"queued": n}`) |
+| `GET` | `/v1/admin/ingestion/runs/{id}` | Admin. One ingestion job's status |
+| `POST` | `/v1/admin/webhooks/source-changed` | Signed by `X-Handbook-Signature: sha256=<hmac of body>`, no bearer token. Body `{"source_path": "pto-policy.md"}`. Queues one file (202). |
+| `GET` | `/v1/admin/analytics/summary` | Admin. Message counts per outcome |
+| `GET` | `/v1/admin/analytics/unanswered?limit=N` | Admin. Most-asked unanswered questions. No user identities. |
+| `POST` | `/slack/events` | Slack Events API endpoint. Signed with `SLACK_SIGNING_SECRET`. |
 
-Outcomes returned with each answer are `answered`, `declined_no_source`, or `routed_to_human`.
+Admin routes need a token whose audience includes `handbook-admin`, granted through SSO groups (or the dev token list). Outcomes returned with each answer are `answered`, `declined_no_source`, `routed_to_human`, or `clarification_needed`.
+
+## Slack bot
+
+Mention the bot in a channel (`@Handbook how many PTO days do I get?`) or message it directly. It replies in a thread: a placeholder appears at once, then the placeholder is replaced with the cited answer. Slack acknowledgements don't wait for generation. Questions are answered by a bounded worker pool, and when the queue is full the bot replies that it's busy.
+
+Setup in Slack (api.slack.com/apps):
+
+1. Create an app. Under **OAuth & Permissions**, add bot scopes `app_mentions:read`, `chat:write`, `im:history`, `im:read`, and install it. Copy the **Bot User OAuth Token** into `SLACK_BOT_TOKEN`.
+2. Copy the **Signing Secret** into `SLACK_SIGNING_SECRET`, and the bot's user ID (`U...`) into `SLACK_BOT_USER_ID`.
+3. Under **Event Subscriptions**, set the request URL to `https://<your-host>/slack/events` and subscribe to the bot events `app_mention` and `message.im`.
+
+Access: Slack users get company-wide content only (`all-employees`). Restricted audiences such as `hr-only` aren't reachable from Slack until users are mapped to SSO groups.
+
+## Ingestion and webhooks
+
+The server drains the ingestion queue in one background worker every `INGEST_POLL_INTERVAL`. Use `POST /v1/admin/ingestion/runs` to re-index the whole corpus, or send a signed `source-changed` webhook to re-index one file. Jobs are durable in Postgres and retried with backoff.
 
 ## Testing and quality gates
 
@@ -88,11 +114,15 @@ The golden set lives in [`testdata/golden/v1.json`](testdata/golden/v1.json). Th
 | `internal/retrieval` | Audience-filtered hybrid search (vector and full-text, fused with RRF) |
 | `internal/answer` | Policy checks, weak-evidence gate, grounded prompt, citations |
 | `internal/auth`, `internal/httpapi` | Bearer auth and the HTTP handlers |
-| `web/` | Browser UI in Yew (Rust → WASM). `make web-test`, `make web` |
+| `internal/admin` | Admin routes, the signed webhook, and analytics |
+| `internal/slack` | Slack event intake, signature checks, the worker pool, and replies |
+| `web/` | Browser UI in Yew (Rust → WASM), streaming answers. `make web-test`, `make web` |
 | `spec.md`, `proposal.md` | Acceptance criteria and the design reference |
 
 ## Status
 
-Built: ingestion, hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, and a Yew web UI (token sign-in, answers with sources, feedback). The UI reads full answers and doesn't stream them yet.
+Built: ingestion (queue, background worker, admin runs, signed webhook), hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, admin analytics, a Slack bot with ack-then-answer threads, and a Yew web UI that streams answers.
 
-Not yet built: the Slack bot, admin and webhook endpoints, a local Ollama generator tier, and a live test against a real identity provider.
+Verified: unit and race tests for every package, DB-backed store tests, the privacy gate, the golden eval against the Anthropic API (7/7), the smoke script, and live checks of the admin routes, the signed webhook, and the SSE stream.
+
+Not verified: the Slack bot against a real workspace (it's covered by fake-client tests only), the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.

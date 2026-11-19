@@ -401,7 +401,7 @@ SSO token → user id + group/audience claims
 3. **Resilience:** generator interface, circuit breaker, LLM semaphore, local fallback on the Mac, Postgres snapshot, retrieval-only tier, weekly drill.
 4. **Hardening:** goroutine-leak tests, `-race` in CI, graceful shutdown, pprof and goroutine metrics, load test with 20-30 simultaneous questions.
 5. **Operate:** feedback, unanswered-question report (reveals handbook gaps), dashboards and alerts.
-6. **Later:** HRIS integration for personal answers, restricted documents, answer cache, token streaming in the Yew UI.
+6. **Later:** HRIS integration for personal answers, restricted documents (including mapping Slack users to SSO groups), answer cache.
 
 ## 16. Open questions
 1. Is any handbook content restricted by role, team, or country?

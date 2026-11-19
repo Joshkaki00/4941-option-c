@@ -1,7 +1,14 @@
 mod model;
 
+use std::cell::Cell;
+use std::rc::Rc;
+
+use futures_util::StreamExt;
 use gloo_net::http::{Request, Response};
-use model::{Answer, ConversationCreated, FeedbackBody, NewQuestion, bearer, is_valid_question, outcome_label};
+use model::{
+    Answer, ConversationCreated, ErrorEvent, FeedbackBody, NewQuestion, SseEvent, TokenEvent,
+    bearer, is_valid_question, outcome_label, parse_sse, take_utf8,
+};
 use yew::platform::spawn_local;
 use yew::prelude::*;
 
@@ -12,6 +19,7 @@ fn check(resp: &Response) -> Result<(), String> {
     match resp.status() {
         200..=299 => Ok(()),
         401 => Err("That access token was rejected.".into()),
+        403 => Err("This token is not allowed to ask questions.".into()),
         404 => Err("That conversation was not found. Ask again to start a new one.".into()),
         code => Err(format!("The server returned HTTP {code}.")),
     }
@@ -21,21 +29,37 @@ fn net_err(e: impl std::fmt::Display) -> String {
     format!("Network or response error: {e}")
 }
 
-/// Ask one question. Creates a conversation when none exists yet.
-async fn ask(token: &str, conv: Option<String>, question: &str) -> Result<(String, Answer), String> {
-    let conv = match conv {
-        Some(id) => id,
-        None => {
-            let resp = Request::post(&format!("{API}/conversations"))
-                .header("Authorization", &bearer(token))
-                .send()
-                .await
-                .map_err(net_err)?;
-            check(&resp)?;
-            resp.json::<ConversationCreated>().await.map_err(net_err)?.id
-        }
+/// Creates a conversation when none exists yet and returns its id.
+async fn ensure_conversation(token: &str, conv: Option<String>) -> Result<String, String> {
+    if let Some(id) = conv {
+        return Ok(id);
+    }
+    let resp = Request::post(&format!("{API}/conversations"))
+        .header("Authorization", &bearer(token))
+        .send()
+        .await
+        .map_err(net_err)?;
+    check(&resp)?;
+    Ok(resp
+        .json::<ConversationCreated>()
+        .await
+        .map_err(net_err)?
+        .id)
+}
+
+/// Asks one question and streams the SSE response, calling `on_event` for each event as it
+/// arrives. Returns the conversation id so the caller can reuse it.
+async fn ask_streaming(
+    token: &str,
+    conv: Option<String>,
+    question: &str,
+    mut on_event: impl FnMut(SseEvent),
+) -> Result<String, String> {
+    let conv = ensure_conversation(token, conv).await?;
+    let body = NewQuestion {
+        content: question,
+        stream: true,
     };
-    let body = NewQuestion { content: question, stream: false };
     let resp = Request::post(&format!("{API}/conversations/{conv}/messages"))
         .header("Authorization", &bearer(token))
         .json(&body)
@@ -44,12 +68,31 @@ async fn ask(token: &str, conv: Option<String>, question: &str) -> Result<(Strin
         .await
         .map_err(net_err)?;
     check(&resp)?;
-    let answer = resp.json::<Answer>().await.map_err(net_err)?;
-    Ok((conv, answer))
+    let raw = resp
+        .body()
+        .ok_or_else(|| "The server sent no answer.".to_string())?;
+    let mut chunks = wasm_streams::ReadableStream::from_raw(raw).into_stream();
+
+    let mut pending: Vec<u8> = Vec::new();
+    let mut buffer = String::new();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream interrupted: {e:?}"))?;
+        pending.extend(js_sys::Uint8Array::new(&chunk).to_vec());
+        buffer.push_str(&take_utf8(&mut pending));
+        let (events, rest) = parse_sse(&buffer);
+        buffer = rest;
+        for event in events {
+            on_event(event);
+        }
+    }
+    Ok(conv)
 }
 
 async fn send_feedback(token: &str, message_id: &str, rating: i8) -> Result<(), String> {
-    let body = FeedbackBody { rating, comment: String::new() };
+    let body = FeedbackBody {
+        rating,
+        comment: String::new(),
+    };
     let resp = Request::post(&format!("{API}/messages/{message_id}/feedback"))
         .header("Authorization", &bearer(token))
         .json(&body)
@@ -71,6 +114,7 @@ fn App() -> Html {
     let question = use_state(String::new);
     let conv = use_state(|| None::<String>);
     let busy = use_state(|| false);
+    let draft = use_state(String::new);
     let result = use_state(|| None::<Result<Answer, String>>);
     let rated = use_state(|| None::<i8>);
     let notice = use_state(String::new);
@@ -96,11 +140,12 @@ fn App() -> Html {
     };
 
     let on_ask = {
-        let (token, question, conv, busy, result, rated, notice) = (
+        let (token, question, conv, busy, draft, result, rated, notice) = (
             token.clone(),
             question.clone(),
             conv.clone(),
             busy.clone(),
+            draft.clone(),
             result.clone(),
             rated.clone(),
             notice.clone(),
@@ -111,20 +156,55 @@ fn App() -> Html {
             }
             let q = question.trim().to_string();
             if !is_valid_question(&q) {
-                result.set(Some(Err("Enter a question of up to 1000 characters.".into())));
+                result.set(Some(Err(
+                    "Enter a question of up to 1000 characters.".into()
+                )));
                 return;
             }
             busy.set(true);
+            draft.set(String::new());
             rated.set(None);
             notice.set(String::new());
+            result.set(None);
             let tok = (*token).clone();
             let existing = (*conv).clone();
-            let (conv, busy, result) = (conv.clone(), busy.clone(), result.clone());
+            let (conv, busy, draft, result) =
+                (conv.clone(), busy.clone(), draft.clone(), result.clone());
             spawn_local(async move {
-                match ask(&tok, existing, &q).await {
-                    Ok((id, answer)) => {
+                let got_done = Rc::new(Cell::new(false));
+                let done_flag = got_done.clone();
+                let outcome =
+                    ask_streaming(&tok, existing, &q, |event| match event.event.as_str() {
+                        "token" => {
+                            if let Ok(t) = serde_json::from_str::<TokenEvent>(&event.data) {
+                                draft.set(format!("{}{}", *draft, t.text));
+                            }
+                        }
+                        "done" => {
+                            done_flag.set(true);
+                            match serde_json::from_str::<Answer>(&event.data) {
+                                Ok(answer) => result.set(Some(Ok(answer))),
+                                Err(e) => result.set(Some(Err(net_err(e)))),
+                            }
+                        }
+                        "error" => {
+                            if let Ok(e) = serde_json::from_str::<ErrorEvent>(&event.data) {
+                                done_flag.set(true);
+                                result.set(Some(Err(e.error)));
+                            }
+                        }
+                        _ => {}
+                    })
+                    .await;
+
+                match outcome {
+                    Ok(id) => {
                         conv.set(Some(id));
-                        result.set(Some(Ok(answer)));
+                        if !got_done.get() {
+                            result.set(Some(Err(
+                                "The answer stopped early. Please try again.".into()
+                            )));
+                        }
                     }
                     Err(e) => {
                         // Drop the conversation so the next attempt starts a fresh one.
@@ -169,6 +249,11 @@ fn App() -> Html {
                 { if busy_now { "Asking…" } else { "Ask" } }
             </button>
             <p class="notice" role="status">{ (*notice).clone() }</p>
+            { if busy_now && (*result).is_none() && !draft.is_empty() {
+                html! { <section class="answer"><p class="text">{ (*draft).clone() }</p></section> }
+            } else {
+                html! {}
+            } }
             { view_result(&result, *rated, &on_rate) }
         </main>
     }

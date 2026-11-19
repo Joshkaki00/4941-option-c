@@ -135,7 +135,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 
 | Layer | Choice |
 |---|---|
-| Service | Go, stdlib `net/http` (or chi); one binary; `errgroup`, semaphores, and `context` for concurrency (no custom channel frameworks) |
+| Service | Go, stdlib `net/http`; one binary; `errgroup`, semaphores, and `context` for concurrency (no custom channel frameworks) |
 | DB | Postgres + pgvector via `pgx` and `pgvector-go` |
 | Job queue | `ingestion_jobs` table with SKIP LOCKED (or River) - no extra infrastructure |
 | LLM (primary) | Anthropic API via the official Go SDK; start with a Sonnet-class model, test a Haiku-class model on the golden set |

@@ -24,7 +24,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 ## Working agreements
 
 - Spec before code. Prefer Given/When/Then and testable requirements.
-- One ticket, one branch from `main`, one PR. Small commits.
+- Work on `main` only. No feature branches, no PRs. Small commits; push main when asked.
 - Tests first for new behavior; verify boundaries (empty, null, auth deny, disconnect).
 - After each phase: tests + race/leak checks before proceeding.
 - Shared agent config lives in `.claude/` and is committed. Personal prefs stay in `~/.claude/`.
@@ -38,7 +38,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 - `.claude/skills/` — repeatable workflows (`/review`, `/verify`, `/handoff`)
 - `.claude/settings.json` — shared permissions and hooks
 
-## Verify before merge
+## Verify before commit
 
 1. Behavior matches the relevant section of `proposal.md`
 2. Tests pass (`go test ./...` once the module exists; include `-race` for concurrency)

@@ -47,6 +47,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 
 - Spec before code. Prefer Given/When/Then and testable requirements.
 - Work on `main` only. No feature branches, no PRs. Small commits; push main when asked.
+- **Hard hook:** always **Read** a file before **Edit/Write** on it (enforced in `.claude/hooks/` and `.cursor/hooks/`). New-file creates are allowed.
 - Tests first for new behavior; verify boundaries (empty, null, auth deny, disconnect).
 - After each phase: tests + race/leak checks before proceeding.
 - Shared agent config lives in `.claude/` and is committed. Personal prefs stay in `~/.claude/`.

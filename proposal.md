@@ -143,7 +143,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 | Reranker | Skip in v1; add a hosted rerank endpoint if evals show a gain |
 | Front end | Slack bot first |
 | Doc parsing | Go for Markdown/HTML/DOCX; a small Python step for messy PDFs (offline only) |
-| Hosting | **Option B (recommended):** small container host plus managed Postgres with backups. **Option A:** one VPS with Postgres in Docker and a nightly dump |
+| Hosting | **Option B (recommended):** small container host plus managed Postgres with backups.
 
 Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, microservices.
 

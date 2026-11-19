@@ -83,3 +83,7 @@ Temporary Items
 *.claude/
 
 *.cursor/
+
+# Secrets / local env (keep .env.example)
+*.env
+!*.env.example

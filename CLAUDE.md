@@ -22,7 +22,8 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 - Single test: `go test ./internal/retrieval -run AudienceFilter -v` (the privacy gate)
 - Privacy gate (fails, not skips, without a DB): `make test-privacy`
 - Golden evals (chunking/prompt/model/ingest changes): `make eval` (needs `ANTHROPIC_API_KEY`) or `make eval-retrieval` (recall only). Gates: recall@5 ≥ 0.8, correct-decline ≥ 0.95.
-- Ingest the sample corpus: `make ingest`. Local server with dev auth: `make run-dev`. Gate 4 smoke against a running server: `make smoke`.
+- Env / Anthropic key: `make env` (copies `.env.example` → `.env`), then set `ANTHROPIC_API_KEY=…` in `.env`. Loaded automatically by `cmd/server|ingest|eval` and by Make. Never commit `.env`.
+- Ingest the sample corpus: `make ingest`. With LLM: `make run`. Retrieval-only local: `make run-dev`. Gate 4 smoke: `make smoke`.
 - DB tests need `TEST_DATABASE_URL` (the Makefile sets `postgres:///handbook_test`) with pgvector installed. `DATABASE_URL` defaults to `postgres:///handbook`.
 - Before committing: run `/verify` (checklist and gate details in `spec.md`).
 

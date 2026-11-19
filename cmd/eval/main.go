@@ -38,6 +38,9 @@ func run() (int, error) {
 		return 2, err
 	}
 
+	if err := config.LoadDotEnv(".env"); err != nil {
+		return 2, err
+	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return 2, err

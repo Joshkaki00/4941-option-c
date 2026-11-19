@@ -1,5 +1,7 @@
 # Ask the Handbook
 
+**AI use:** I used Claude Code only to debug, build, make, and run tests; the design decisions are mine.
+
 An internal assistant that answers employee questions from the company handbook. Every answer cites its source passages. When the handbook doesn't cover a question, the assistant declines instead of guessing.
 
 - **Grounded:** answers come only from retrieved handbook passages, and each claim cites one.

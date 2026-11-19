@@ -1,11 +1,6 @@
 package tests
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,61 +9,6 @@ import (
 	"github.com/Joshkaki00/4941-option-c/internal/auth"
 	"github.com/Joshkaki00/4941-option-c/internal/slack"
 )
-
-func v0Sig(secret, ts string, body []byte) string {
-	m := hmac.New(sha256.New, []byte(secret))
-	m.Write([]byte("v0:" + ts + ":"))
-	m.Write(body)
-	return "v0=" + hex.EncodeToString(m.Sum(nil))
-}
-
-func TestSlackVerifyAcceptsCurrentSignature(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	ts := strconv.FormatInt(now.Unix(), 10)
-	body := []byte(`{"type":"event_callback"}`)
-	if err := slack.Verify("sec", body, ts, v0Sig("sec", ts, body), now); err != nil {
-		t.Fatalf("valid request rejected: %v", err)
-	}
-}
-
-func TestSlackVerifyWindowIsFiveMinutesEachWay(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	body := []byte(`{}`)
-	for _, tc := range []struct {
-		skew time.Duration
-		want error
-	}{
-		{5 * time.Minute, nil},
-		{-5 * time.Minute, nil},
-		{5*time.Minute + time.Second, slack.ErrStaleTimestamp},
-		{-(5*time.Minute + time.Second), slack.ErrStaleTimestamp},
-	} {
-		ts := strconv.FormatInt(now.Add(tc.skew).Unix(), 10)
-		err := slack.Verify("sec", body, ts, v0Sig("sec", ts, body), now)
-		if tc.want == nil && err != nil {
-			t.Errorf("skew %v: %v", tc.skew, err)
-		}
-		if tc.want != nil && !errors.Is(err, tc.want) {
-			t.Errorf("skew %v: err = %v, want %v", tc.skew, err, tc.want)
-		}
-	}
-}
-
-func TestSlackVerifyRejectsForgery(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	ts := strconv.FormatInt(now.Unix(), 10)
-	body := []byte(`{"type":"event_callback"}`)
-	sig := v0Sig("sec", ts, body)
-	if err := slack.Verify("sec", []byte(`{"type":"x"}`), ts, sig, now); !errors.Is(err, slack.ErrBadSignature) {
-		t.Fatalf("altered body accepted: %v", err)
-	}
-	if err := slack.Verify("other", body, ts, sig, now); !errors.Is(err, slack.ErrBadSignature) {
-		t.Fatalf("wrong secret accepted: %v", err)
-	}
-	if err := slack.Verify("sec", body, ts, "v1="+strings.TrimPrefix(sig, "v0="), now); !errors.Is(err, slack.ErrBadSignature) {
-		t.Fatalf("wrong scheme prefix accepted: %v", err)
-	}
-}
 
 func TestSlackQuestionFromMention(t *testing.T) {
 	q, ok := slack.Question(slack.InnerEvent{Type: "app_mention", Text: "<@UBOT> pto days?"}, "UBOT")

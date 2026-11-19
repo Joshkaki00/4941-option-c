@@ -2,11 +2,7 @@ package slack
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -16,18 +12,16 @@ import (
 )
 
 const (
-	maxEventBytes = 64 << 10
-	busyPostWait  = 2 * time.Second // Slack expects an ack within 3s; keep the busy reply inside that
-	finalWait     = 10 * time.Second
+	busyPostWait = 2 * time.Second // keeps the busy reply quick; the event is already acknowledged
+	finalWait    = 10 * time.Second
 )
 
 // Config tunes the bot. Zero values get defaults in NewBot.
 type Config struct {
-	SigningSecret string
-	BotUserID     string
-	Workers       int           // bounded ask concurrency (default 2)
-	QueueSize     int           // pending questions before "busy" replies (default 16)
-	AskTimeout    time.Duration // per-question generation budget (default 30s)
+	BotUserID  string        // the bot's own user ID, used to strip mentions (from auth.test)
+	Workers    int           // bounded ask concurrency (default 2)
+	QueueSize  int           // pending questions before "busy" replies (default 16)
+	AskTimeout time.Duration // per-question generation budget (default 30s)
 }
 
 // Job is one question waiting for an answer.
@@ -49,7 +43,7 @@ type Asker interface {
 	Ask(ctx context.Context, req answer.Request, onToken func(string) error) (answer.Result, error)
 }
 
-// Bot accepts Slack events and answers them through a bounded worker pool.
+// Bot answers Slack questions through a bounded worker pool.
 type Bot struct {
 	cfg    Config
 	client Client
@@ -83,8 +77,30 @@ func AudiencesFor(_ string) []string {
 	return []string{auth.CompanyWideAudience}
 }
 
-// Submit queues a job without blocking. It returns false when the queue is full.
-func (b *Bot) Submit(j Job) bool {
+// HandleEvent turns one event into a queued question, or replies "busy" when the queue is full.
+// Events that aren't questions are ignored.
+func (b *Bot) HandleEvent(ctx context.Context, ev InnerEvent) {
+	q, ok := Question(ev, b.cfg.BotUserID)
+	if !ok {
+		return
+	}
+	thread := ev.ThreadTS
+	if thread == "" {
+		thread = ev.TS
+	}
+	job := Job{Channel: ev.Channel, ThreadTS: thread, User: ev.User, Question: q}
+	if b.submit(job) {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, busyPostWait)
+	defer cancel()
+	if _, err := b.client.PostMessage(pctx, job.Channel, job.ThreadTS, BusyText); err != nil {
+		b.log.Error("slack busy reply failed", "channel", job.Channel, "err", err)
+	}
+}
+
+// submit queues a job without blocking. It returns false when the queue is full.
+func (b *Bot) submit(j Job) bool {
 	select {
 	case b.jobs <- j:
 		return true
@@ -137,7 +153,7 @@ func (b *Bot) process(ctx context.Context, j Job) {
 		b.persist(ctx, j, res)
 	}
 
-	// Final update outlives a cancelled ctx so a shutdown does not leave "Looking…" behind.
+	// The final update outlives a cancelled ctx so a shutdown does not leave "Looking…" behind.
 	upCtx, upCancel := context.WithTimeout(context.WithoutCancel(ctx), finalWait)
 	defer upCancel()
 	if err := b.client.UpdateMessage(upCtx, j.Channel, ts, text); err != nil {
@@ -167,74 +183,4 @@ func (b *Bot) persist(ctx context.Context, j Job, res answer.Result) {
 	if err != nil {
 		b.log.Error("slack persist: message", "err", err)
 	}
-}
-
-// Handler serves POST /slack/events.
-func (b *Bot) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /slack/events", b.events)
-	return mux
-}
-
-func (b *Bot) events(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEventBytes))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			return
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if err := Verify(b.cfg.SigningSecret, body,
-		r.Header.Get("X-Slack-Request-Timestamp"), r.Header.Get("X-Slack-Signature"), time.Now()); err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	var env Envelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	switch env.Type {
-	case "url_verification":
-		writeJSON(w, http.StatusOK, map[string]string{"challenge": env.Challenge})
-		return
-	case "event_callback":
-	default:
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	// Slack retries events it thinks went unacknowledged. Answering a retry would post twice.
-	if r.Header.Get("X-Slack-Retry-Num") != "" || env.Event == nil {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	q, ok := Question(*env.Event, b.cfg.BotUserID)
-	if !ok {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	thread := env.Event.ThreadTS
-	if thread == "" {
-		thread = env.Event.TS
-	}
-	job := Job{Channel: env.Event.Channel, ThreadTS: thread, User: env.Event.User, Question: q}
-	if !b.Submit(job) {
-		ctx, cancel := context.WithTimeout(r.Context(), busyPostWait)
-		defer cancel()
-		if _, err := b.client.PostMessage(ctx, job.Channel, job.ThreadTS, BusyText); err != nil {
-			b.log.Error("slack busy reply failed", "channel", job.Channel, "err", err)
-		}
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }

@@ -9,23 +9,24 @@ import (
 
 func TestSlackDisabledByDefault(t *testing.T) {
 	cfg := mustLoad(t, base())
-	if cfg.SlackBotToken != "" {
-		t.Fatal("Slack must be off unless SLACK_BOT_TOKEN is set")
+	if cfg.SlackBotToken != "" || cfg.SlackAppToken != "" {
+		t.Fatal("Slack must be off unless SLACK_BOT_TOKEN and SLACK_APP_TOKEN are set")
 	}
 }
 
-func TestSlackTokenRequiresSigningSecretAndBotUserID(t *testing.T) {
+func TestSlackSocketModeNeedsBothTokens(t *testing.T) {
 	m := base()
 	m["SLACK_BOT_TOKEN"] = "xoxb-test"
-	wantLoadErr(t, m, "SLACK_SIGNING_SECRET")
+	wantLoadErr(t, m, "SLACK_APP_TOKEN")
 
-	m["SLACK_SIGNING_SECRET"] = "signing-secret"
-	wantLoadErr(t, m, "SLACK_BOT_USER_ID")
+	m = base()
+	m["SLACK_APP_TOKEN"] = "xapp-test"
+	wantLoadErr(t, m, "SLACK_APP_TOKEN requires SLACK_BOT_TOKEN")
 
-	m["SLACK_BOT_USER_ID"] = "UBOT"
+	m["SLACK_BOT_TOKEN"] = "xoxb-test"
 	cfg := mustLoad(t, m)
-	if cfg.SlackBotToken != "xoxb-test" || cfg.SlackSigningSecret != "signing-secret" || cfg.SlackBotUserID != "UBOT" {
-		t.Fatalf("slack config = %+v", cfg)
+	if cfg.SlackBotToken != "xoxb-test" || cfg.SlackAppToken != "xapp-test" {
+		t.Fatalf("slack tokens = %q / %q", cfg.SlackBotToken, cfg.SlackAppToken)
 	}
 	if cfg.SlackWorkers != 2 || cfg.SlackQueue != 16 {
 		t.Fatalf("defaults: workers=%d queue=%d", cfg.SlackWorkers, cfg.SlackQueue)
@@ -35,8 +36,7 @@ func TestSlackTokenRequiresSigningSecretAndBotUserID(t *testing.T) {
 func TestSlackWorkersAndQueueMustBePositive(t *testing.T) {
 	m := base()
 	m["SLACK_BOT_TOKEN"] = "xoxb-test"
-	m["SLACK_SIGNING_SECRET"] = "s"
-	m["SLACK_BOT_USER_ID"] = "UBOT"
+	m["SLACK_APP_TOKEN"] = "xapp-test"
 	m["SLACK_WORKERS"] = "0"
 	wantLoadErr(t, m, "SLACK_WORKERS")
 
@@ -45,7 +45,7 @@ func TestSlackWorkersAndQueueMustBePositive(t *testing.T) {
 	wantLoadErr(t, m, "SLACK_QUEUE")
 }
 
-func TestSlackSecretsAreNotEchoedInErrors(t *testing.T) {
+func TestSlackTokensAreNotEchoedInErrors(t *testing.T) {
 	m := base()
 	m["SLACK_BOT_TOKEN"] = "xoxb-secret-value"
 	_, err := config.Load(env(m))

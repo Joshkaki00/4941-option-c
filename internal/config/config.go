@@ -14,34 +14,33 @@ import (
 
 // Config is the validated runtime configuration.
 type Config struct {
-	DatabaseURL        string
-	DBMaxConns         int32
-	ListenAddr         string
-	MaxConcurrent      int
-	EmbedProvider      string // ollama | hash
-	OllamaURL          string
-	EmbedModel         string
-	EmbedDim           int
-	LLMProvider        string // anthropic | none
-	AnthropicKey       string
-	AnthropicModel     string
-	MaxTokens          int64
-	OIDCIssuer         string
-	OIDCClientID       string
-	GroupsClaim        string
-	Tokens             auth.StaticTokens // dev only; empty when OIDC is configured
-	TopK               int
-	MinSimilarity      float64
-	RetrieveTimeout    time.Duration
-	HandoffText        string
-	WebhookSecret      []byte        // HMAC key for source-changed webhooks; empty disables them
-	IngestRoot         string        // corpus directory the ingest worker reads from
-	IngestPoll         time.Duration // how often the server drains the ingestion queue
-	SlackBotToken      string        // empty disables the Slack bot
-	SlackSigningSecret string
-	SlackBotUserID     string
-	SlackWorkers       int // concurrent Slack answers
-	SlackQueue         int // pending Slack questions before "busy" replies
+	DatabaseURL     string
+	DBMaxConns      int32
+	ListenAddr      string
+	MaxConcurrent   int
+	EmbedProvider   string // ollama | hash
+	OllamaURL       string
+	EmbedModel      string
+	EmbedDim        int
+	LLMProvider     string // anthropic | none
+	AnthropicKey    string
+	AnthropicModel  string
+	MaxTokens       int64
+	OIDCIssuer      string
+	OIDCClientID    string
+	GroupsClaim     string
+	Tokens          auth.StaticTokens // dev only; empty when OIDC is configured
+	TopK            int
+	MinSimilarity   float64
+	RetrieveTimeout time.Duration
+	HandoffText     string
+	WebhookSecret   []byte        // HMAC key for source-changed webhooks; empty disables them
+	IngestRoot      string        // corpus directory the ingest worker reads from
+	IngestPoll      time.Duration // how often the server drains the ingestion queue
+	SlackBotToken   string        // xoxb-; with SlackAppToken, enables the Slack bot (Socket Mode)
+	SlackAppToken   string        // xapp-; app-level token for the Socket Mode connection
+	SlackWorkers    int           // concurrent Slack answers
+	SlackQueue      int           // pending Slack questions before "busy" replies
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -117,8 +116,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg.SlackBotToken = get("SLACK_BOT_TOKEN", "")
-	cfg.SlackSigningSecret = get("SLACK_SIGNING_SECRET", "")
-	cfg.SlackBotUserID = get("SLACK_BOT_USER_ID", "")
+	cfg.SlackAppToken = get("SLACK_APP_TOKEN", "")
 	if cfg.SlackWorkers, err = intEnv(get, "SLACK_WORKERS", 2); err != nil {
 		return Config{}, err
 	}
@@ -131,13 +129,13 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.SlackQueue < 1 {
 		return Config{}, errors.New("config: SLACK_QUEUE must be at least 1")
 	}
-	if cfg.SlackBotToken != "" {
-		if cfg.SlackSigningSecret == "" {
-			return Config{}, errors.New("config: SLACK_BOT_TOKEN requires SLACK_SIGNING_SECRET")
-		}
-		if cfg.SlackBotUserID == "" {
-			return Config{}, errors.New("config: SLACK_BOT_TOKEN requires SLACK_BOT_USER_ID")
-		}
+	// Socket Mode needs both tokens. Setting only one is a mistake, so fail rather than
+	// silently leaving the bot off.
+	if cfg.SlackBotToken != "" && cfg.SlackAppToken == "" {
+		return Config{}, errors.New("config: SLACK_BOT_TOKEN requires SLACK_APP_TOKEN (Socket Mode)")
+	}
+	if cfg.SlackAppToken != "" && cfg.SlackBotToken == "" {
+		return Config{}, errors.New("config: SLACK_APP_TOKEN requires SLACK_BOT_TOKEN")
 	}
 
 	switch cfg.EmbedProvider {

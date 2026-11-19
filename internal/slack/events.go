@@ -2,14 +2,7 @@ package slack
 
 import "strings"
 
-// Envelope is the outer Slack event payload.
-type Envelope struct {
-	Type      string      `json:"type"`
-	Challenge string      `json:"challenge"`
-	Event     *InnerEvent `json:"event"`
-}
-
-// InnerEvent is the event itself (app_mention or message).
+// InnerEvent is the event itself (app_mention or message), converted from a Socket Mode payload.
 type InnerEvent struct {
 	Type        string `json:"type"`
 	ChannelType string `json:"channel_type"`

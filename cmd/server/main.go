@@ -8,8 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
+
+	slackapi "github.com/slack-go/slack"
+	"github.com/slack-go/slack/socketmode"
 
 	"github.com/Joshkaki00/4941-option-c/internal/admin"
 	"github.com/Joshkaki00/4941-option-c/internal/app"
@@ -92,25 +96,11 @@ func run() error {
 	mux.Handle("/", api.Handler())
 
 	if cfg.SlackBotToken != "" {
-		// Slack workers get their own context so they stop before the store closes.
-		bot := slack.NewBot(slack.Config{
-			SigningSecret: cfg.SlackSigningSecret,
-			BotUserID:     cfg.SlackBotUserID,
-			Workers:       cfg.SlackWorkers,
-			QueueSize:     cfg.SlackQueue,
-		}, slack.NewAPIClient(cfg.SlackBotToken), rt.Store, rt.Answers, rt.Logger)
-		slackCtx, cancelSlack := context.WithCancel(ctx)
-		slackDone := make(chan struct{})
-		go func() {
-			defer close(slackDone)
-			bot.Run(slackCtx)
-		}()
-		defer func() {
-			cancelSlack()
-			<-slackDone
-		}()
-		mux.Handle("/slack/", bot.Handler())
-		rt.Logger.Info("slack bot enabled", "workers", cfg.SlackWorkers, "queue", cfg.SlackQueue)
+		stopSlack, err := startSlack(ctx, cfg, rt)
+		if err != nil {
+			return fmt.Errorf("slack: %w", err)
+		}
+		defer stopSlack()
 	}
 
 	srv := &http.Server{
@@ -140,6 +130,47 @@ func run() error {
 	defer cancel()
 	rt.Logger.Info("shutting down")
 	return srv.Shutdown(shutdownCtx)
+}
+
+// startSlack connects the bot over Socket Mode and starts its workers and event loop.
+// It checks the bot token first (auth.test), which also gives the bot's user ID for mention
+// stripping, so a bad token fails startup instead of failing silently later.
+// The returned stop function cancels and joins everything it started.
+func startSlack(ctx context.Context, cfg config.Config, rt *app.Runtime) (func(), error) {
+	api := slackapi.New(cfg.SlackBotToken, slackapi.OptionAppLevelToken(cfg.SlackAppToken))
+	me, err := api.AuthTest()
+	if err != nil {
+		return nil, fmt.Errorf("auth.test: %w", err)
+	}
+	sm := socketmode.New(api)
+	bot := slack.NewBot(slack.Config{
+		BotUserID: me.UserID,
+		Workers:   cfg.SlackWorkers,
+		QueueSize: cfg.SlackQueue,
+	}, slack.NewAPIClient(cfg.SlackBotToken), rt.Store, rt.Answers, rt.Logger)
+
+	slackCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		bot.Run(slackCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		bot.Listen(slackCtx, sm.Events, func(req socketmode.Request) error { return sm.Ack(req) })
+	}()
+	go func() {
+		defer wg.Done()
+		if err := sm.RunContext(slackCtx); err != nil && slackCtx.Err() == nil {
+			rt.Logger.Error("slack socket stopped", "err", err)
+		}
+	}()
+	rt.Logger.Info("slack bot connected", "bot_user", me.UserID, "workers", cfg.SlackWorkers, "queue", cfg.SlackQueue)
+	return func() {
+		cancel()
+		wg.Wait()
+	}, nil
 }
 
 // runIngestLoop drains the ingestion queue on every tick until ctx is cancelled.

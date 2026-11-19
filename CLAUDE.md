@@ -13,7 +13,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 ## Layout
 
 - `cmd/server` (API), `cmd/ingest` (corpus → `ingestion_jobs` → versions), `cmd/eval` (golden gates)
-- `internal/`: `store` (schema in `migrations/`, publish/jobs, admin queries), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `admin` (`/v1/admin`, signed webhook), `slack` (events, signature, worker pool), `ingest`, `eval`, `config`, `app` (wiring)
+- `internal/`: `store` (schema in `migrations/`, publish/jobs, admin queries), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `admin` (`/v1/admin`, signed webhook), `slack` (Socket Mode listener, worker pool), `ingest`, `eval`, `config`, `app` (wiring)
 - `web/`: Yew (Rust → WASM) browser UI. `model.rs` holds the API types and pure helpers (host-testable); `main.rs` is the Yew app; `Trunk.toml` proxies `/v1` to the Go API.
 - `testdata/handbook/` is a fictional sample corpus; `testdata/golden/v1.json` is the seed eval set
 

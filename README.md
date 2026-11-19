@@ -43,7 +43,7 @@ Settings come from environment variables. The Go binaries load `.env` without ov
 | `MIN_SIMILARITY`, `TOP_K`, `RETRIEVE_TIMEOUT` | Retrieval tuning |
 | `WEBHOOK_SECRET` | HMAC key for the source-changed webhook (32+ characters). Empty disables it. |
 | `INGEST_ROOT`, `INGEST_POLL_INTERVAL` | Corpus directory and how often the server drains the ingestion queue |
-| `SLACK_BOT_TOKEN` | Enables the Slack bot. Requires `SLACK_SIGNING_SECRET` and `SLACK_BOT_USER_ID`. |
+| `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | Enables the Slack bot over Socket Mode. `xoxb-` bot token and `xapp-` app-level token. Set both or neither. |
 | `SLACK_WORKERS`, `SLACK_QUEUE` | Concurrent Slack answers and the pending-question limit before "busy" replies |
 
 The server refuses to start without either `OIDC_ISSUER` or `DEV_AUTH_TOKENS`. Identity always comes from the token, never from request bodies.
@@ -66,7 +66,6 @@ All `/v1` routes require `Authorization: Bearer <token>`.
 | `POST` | `/v1/admin/webhooks/source-changed` | Signed by `X-Handbook-Signature: sha256=<hmac of body>`, no bearer token. Body `{"source_path": "pto-policy.md"}`. Queues one file (202). |
 | `GET` | `/v1/admin/analytics/summary` | Admin. Message counts per outcome |
 | `GET` | `/v1/admin/analytics/unanswered?limit=N` | Admin. Most-asked unanswered questions. No user identities. |
-| `POST` | `/slack/events` | Slack Events API endpoint. Signed with `SLACK_SIGNING_SECRET`. |
 
 Admin routes need a token whose audience includes `handbook-admin`, granted through SSO groups (or the dev token list). Outcomes returned with each answer are `answered`, `declined_no_source`, `routed_to_human`, or `clarification_needed`.
 
@@ -76,9 +75,12 @@ Mention the bot in a channel (`@Handbook how many PTO days do I get?`) or messag
 
 Setup in Slack (api.slack.com/apps):
 
-1. Create an app. Under **OAuth & Permissions**, add bot scopes `app_mentions:read`, `chat:write`, `im:history`, `im:read`, and install it. Copy the **Bot User OAuth Token** into `SLACK_BOT_TOKEN`.
-2. Copy the **Signing Secret** into `SLACK_SIGNING_SECRET`, and the bot's user ID (`U...`) into `SLACK_BOT_USER_ID`.
-3. Under **Event Subscriptions**, set the request URL to `https://<your-host>/slack/events` and subscribe to the bot events `app_mention` and `message.im`.
+1. Turn on **Socket Mode** and create an app-level token with the `connections:write` scope. Copy it into `SLACK_APP_TOKEN` (`xapp-...`).
+2. Under **OAuth & Permissions**, add bot scopes `app_mentions:read`, `chat:write`, `im:history`, `im:read`, and install the app to the workspace. Copy the **Bot User OAuth Token** into `SLACK_BOT_TOKEN` (`xoxb-...`).
+3. Under **Event Subscriptions**, subscribe to the bot events `app_mention` and `message.im`. Socket Mode needs no request URL.
+4. Invite the bot to any channel it should answer in (`/invite @<bot>`). Slack refuses to post to a channel the bot hasn't joined (`not_in_channel`).
+
+The bot reads its own user ID at startup with `auth.test`, so no other values are needed. The server refuses to start if only one of the two tokens is set, and it exits if `auth.test` rejects the bot token.
 
 Access: Slack users get company-wide content only (`all-employees`). Restricted audiences such as `hr-only` aren't reachable from Slack until users are mapped to SSO groups.
 
@@ -125,4 +127,4 @@ Built: ingestion (queue, background worker, admin runs, signed webhook), hybrid 
 
 Verified: unit and race tests for every package, DB-backed store tests, the privacy gate, the golden eval against the Anthropic API (7/7), the smoke script, and live checks of the admin routes, the signed webhook, and the SSE stream.
 
-Not verified: the Slack bot against a real workspace (it's covered by fake-client tests only), the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.
+Not verified: the Slack bot running live over Socket Mode (covered by fake-client and channel tests only; the bot token passes `auth.test`), the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.

@@ -45,11 +45,9 @@ func (a *Anthropic) Generate(ctx context.Context, system, user string, onText fu
 		if err := msg.Accumulate(ev); err != nil {
 			return Usage{}, fmt.Errorf("accumulate stream: %w", err)
 		}
-		if delta, ok := ev.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
-			if text, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok {
-				if err := onText(text.Text); err != nil {
-					return Usage{}, err
-				}
+		if text, ok := textDelta(ev); ok {
+			if err := onText(text); err != nil {
+				return Usage{}, err
 			}
 		}
 	}
@@ -60,4 +58,17 @@ func (a *Anthropic) Generate(ctx context.Context, system, user string, onText fu
 		InputTokens:  int(msg.Usage.InputTokens),
 		OutputTokens: int(msg.Usage.OutputTokens),
 	}, nil
+}
+
+// textDelta returns the text of a content_block_delta text event, or false for any other event.
+func textDelta(ev anthropic.MessageStreamEventUnion) (string, bool) {
+	delta, ok := ev.AsAny().(anthropic.ContentBlockDeltaEvent)
+	if !ok {
+		return "", false
+	}
+	text, ok := delta.Delta.AsAny().(anthropic.TextDelta)
+	if !ok {
+		return "", false
+	}
+	return text.Text, true
 }

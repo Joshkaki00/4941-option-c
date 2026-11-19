@@ -1,0 +1,8 @@
+# Dev server: `trunk serve` on :8081 proxies /v1 to the Go API on :8080,
+# so the browser stays same-origin and the API needs no CORS headers.
+[serve]
+port = 8081
+
+[[proxy]]
+rewrite = "/v1/"
+backend = "http://localhost:8080/v1/"

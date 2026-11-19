@@ -9,7 +9,7 @@ DATABASE_URL      ?= postgres:///handbook
 TEST_DATABASE_URL ?= postgres:///handbook_test
 export DATABASE_URL TEST_DATABASE_URL
 
-.PHONY: test race vet test-privacy eval eval-retrieval ingest run run-dev smoke env
+.PHONY: test race vet test-privacy eval eval-retrieval ingest run run-dev smoke env web web-test web-build
 
 test:
 	go test ./...
@@ -40,6 +40,16 @@ run-dev:
 
 smoke:
 	./scripts/smoke-ask.sh
+
+# Web UI (Yew, web/). `web` serves on :8081 and proxies /v1 to the API on :8080.
+web-test:
+	cd web && cargo test
+
+web-build:
+	cd web && trunk build
+
+web:
+	cd web && trunk serve
 
 # Create .env from the example if missing.
 env:

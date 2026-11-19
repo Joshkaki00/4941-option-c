@@ -18,7 +18,10 @@ make env                 # create .env from .env.example
 make ingest              # load testdata/handbook into Postgres
 make run-dev             # retrieval-only server on :8080, no LLM key needed
 make smoke               # end-to-end checks against the running server
+make web                 # Yew UI on http://localhost:8081 (proxies /v1 to :8080)
 ```
+
+The web UI needs `trunk` and the `wasm32-unknown-unknown` target: `cargo install trunk --version 0.22.2 --locked` and `rustup target add wasm32-unknown-unknown`.
 
 Local defaults use the Unix socket and your OS user: `DATABASE_URL=postgres:///handbook` and `TEST_DATABASE_URL=postgres:///handbook_test`. Override them in `.env`.
 
@@ -85,10 +88,11 @@ The golden set lives in [`testdata/golden/v1.json`](testdata/golden/v1.json). Th
 | `internal/retrieval` | Audience-filtered hybrid search (vector and full-text, fused with RRF) |
 | `internal/answer` | Policy checks, weak-evidence gate, grounded prompt, citations |
 | `internal/auth`, `internal/httpapi` | Bearer auth and the HTTP handlers |
+| `web/` | Browser UI in Yew (Rust → WASM). `make web-test`, `make web` |
 | `spec.md`, `proposal.md` | Acceptance criteria and the design reference |
 
 ## Status
 
-Built: ingestion, hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, and the retrieval-only tier.
+Built: ingestion, hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, and a Yew web UI (token sign-in, answers with sources, feedback). The UI reads full answers and doesn't stream them yet.
 
 Not yet built: the Slack bot, admin and webhook endpoints, a local Ollama generator tier, and a live test against a real identity provider.

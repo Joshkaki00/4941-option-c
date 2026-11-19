@@ -203,7 +203,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 | LLM (primary) | Anthropic API via the official Go SDK; start with a Sonnet-class model, test a Haiku-class model on the golden set |
 | Embeddings | Open-weight model (e.g. bge-m3 or nomic-embed-text) so the same vectors can be produced hosted or locally |
 | Reranker | Skip in v1; add a hosted rerank endpoint if evals show a gain |
-| Front end | Slack bot first |
+| Front end | Slack bot first; browser UI in Yew (Rust → WASM, `web/`), a static client over the same `/v1` API |
 | Doc parsing | Go for Markdown/HTML/DOCX; a small Python step for messy PDFs (offline only) |
 | Hosting | **Option B (recommended):** small container host plus managed Postgres with backups.
 
@@ -401,7 +401,7 @@ SSO token → user id + group/audience claims
 3. **Resilience:** generator interface, circuit breaker, LLM semaphore, local fallback on the Mac, Postgres snapshot, retrieval-only tier, weekly drill.
 4. **Hardening:** goroutine-leak tests, `-race` in CI, graceful shutdown, pprof and goroutine metrics, load test with 20-30 simultaneous questions.
 5. **Operate:** feedback, unanswered-question report (reveals handbook gaps), dashboards and alerts.
-6. **Later:** HRIS integration for personal answers, restricted documents, web UI, answer cache.
+6. **Later:** HRIS integration for personal answers, restricted documents, answer cache, token streaming in the Yew UI.
 
 ## 16. Open questions
 1. Is any handbook content restricted by role, team, or country?

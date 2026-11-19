@@ -8,12 +8,13 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 
 **Spec:** `spec.md` is the testable contract (ACs + quality gates). `proposal.md` (Draft v3) is the design reference for architecture, data model, API, concurrency, and tradeoffs.
 
-**Status:** MVP built (v1.0 core: ingest, audience-filtered hybrid search, grounded cited answers over SSE, declines, feedback, retrieval-only tier). Not yet built: Slack bot, admin/webhook endpoints, local Ollama generator tier, live Anthropic eval run (needs `ANTHROPIC_API_KEY`).
+**Status:** MVP built (v1.0 core: ingest, audience-filtered hybrid search, grounded cited answers over SSE, declines, feedback, retrieval-only tier). Yew browser UI built in `web/` (token sign-in, answers with sources, feedback; not yet streaming). Not yet built: Slack bot, admin/webhook endpoints, local Ollama generator tier.
 
 ## Layout
 
 - `cmd/server` (API), `cmd/ingest` (corpus → `ingestion_jobs` → versions), `cmd/eval` (golden gates)
 - `internal/`: `store` (schema in `migrations/`, publish/jobs), `chunk`, `embed`, `retrieval` (privacy SQL, RRF), `answer` (policy checks, outcome logic), `llm`, `auth`, `httpapi`, `ingest`, `eval`, `config`, `app` (wiring)
+- `web/`: Yew (Rust → WASM) browser UI. `model.rs` holds the API types and pure helpers (host-testable); `main.rs` is the Yew app; `Trunk.toml` proxies `/v1` to the Go API.
 - `testdata/handbook/` is a fictional sample corpus; `testdata/golden/v1.json` is the seed eval set
 
 ## Commands
@@ -24,12 +25,13 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 - Golden evals (chunking/prompt/model/ingest changes): `make eval` (needs `ANTHROPIC_API_KEY`) or `make eval-retrieval` (recall only). Gates: recall@5 ≥ 0.8, correct-decline ≥ 0.95.
 - Env / Anthropic key: `make env` (copies `.env.example` → `.env`), then set `ANTHROPIC_API_KEY=…` in `.env`. Loaded automatically by `cmd/server|ingest|eval` and by Make. Never commit `.env`.
 - Ingest the sample corpus: `make ingest`. With LLM: `make run`. Retrieval-only local: `make run-dev`. Gate 4 smoke: `make smoke`.
+- Web UI: `make web-test` (host unit tests), `make web-build` (WASM bundle), `make web` (trunk dev server on :8081; start the API first, it proxies `/v1` to :8080).
 - DB tests need `TEST_DATABASE_URL` (the Makefile sets `postgres:///handbook_test`) with pgvector installed. `DATABASE_URL` defaults to `postgres:///handbook`.
 - Before committing: run `/verify` (checklist and gate details in `spec.md`).
 
 ## Architecture (read proposal.md §3, §6, §7, §13 before changing retrieval or concurrency)
 
-- **Stack:** Go (`net/http`), one binary; Postgres + pgvector; Anthropic API primary LLM, local Ollama/MLX fallback, retrieval-only last resort; Slack bot first; SSO (OIDC); durable `ingestion_jobs` (SKIP LOCKED / River) for offline ingest only.
+- **Stack:** Go (`net/http`), one binary; Postgres + pgvector; Anthropic API primary LLM, local Ollama/MLX fallback, retrieval-only last resort; Slack bot first; browser UI in Yew (Rust/WASM, `web/`), a static client that calls `/v1` and holds no logic the server doesn't enforce; SSO (OIDC); durable `ingestion_jobs` (SKIP LOCKED / River) for offline ingest only.
 - **Online ask path** is synchronous and streamed over SSE: SSO identity → audiences → query rewrite → hybrid retrieval (vector + full-text, RRF) filtered by audience → decline without calling the LLM if retrieval is weak → grounded prompt → cited answer.
 - **Offline ingest** goes through `ingestion_jobs`. New versions create new chunks, then flip `is_current` in one transaction. Old chunks are kept for audit but excluded from search.
 - **Fallback chain:** hosted Anthropic API → local Ollama/MLX (limited concurrency) → retrieval-only.

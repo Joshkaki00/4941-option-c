@@ -16,6 +16,7 @@ import (
 	"github.com/Joshkaki00/4941-option-c/internal/eval"
 )
 
+// main runs the golden eval and exits with run's status code.
 func main() {
 	code, err := run()
 	if err != nil {
@@ -24,6 +25,7 @@ func main() {
 	os.Exit(code)
 }
 
+// run scores the golden set against the quality gates. It returns 0 when the gates pass, 1 when they fail, and 2 on a configuration or usage error.
 func run() (int, error) {
 	setPath := flag.String("set", "testdata/golden/v1.json", "golden set file")
 	retrievalOnly := flag.Bool("retrieval-only", false, "score recall@5 only; skip generation and decline gates")
@@ -90,6 +92,7 @@ func run() (int, error) {
 	return 0, nil
 }
 
+// observe runs one golden item through retrieval only, or through the full answer pipeline, and records what came back.
 func observe(ctx context.Context, rt *app.Runtime, it eval.Item, retrievalOnly bool) (eval.Observed, error) {
 	if retrievalOnly {
 		res, err := rt.Searcher.Hybrid(ctx, it.Audiences, it.Question, rt.Config.TopK)

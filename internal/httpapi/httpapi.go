@@ -99,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// createConversation starts a conversation owned by the caller and returns its ID.
 func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.FromContext(r.Context())
 	convID, err := s.d.Store.CreateConversation(r.Context(), id.Subject)
@@ -130,6 +131,7 @@ type citationJSON struct {
 	LastUpdated   string `json:"last_updated"`
 }
 
+// postMessage asks a question in a conversation the caller owns. It streams SSE when the request sets stream, and returns JSON otherwise. A concurrency cap returns 429 when the server is busy.
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.FromContext(r.Context())
 	convID := r.PathValue("id")
@@ -168,6 +170,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	s.jsonAnswer(w, r, convID, identity.Subject, req)
 }
 
+// jsonAnswer answers the question and returns the whole answer as one JSON body. The exchange is persisted before the response is written.
 func (s *Server) jsonAnswer(w http.ResponseWriter, r *http.Request, convID, sub string, req answer.Request) {
 	res, err := s.d.Asker.Ask(r.Context(), req, nil)
 	if err != nil {
@@ -231,6 +234,7 @@ func (s *Server) streamAnswer(w http.ResponseWriter, r *http.Request, convID, su
 	})
 }
 
+// getChunk previews one cited passage. The audience check runs again here, so a restricted passage returns 403 even when its ID is known.
 func (s *Server) getChunk(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.FromContext(r.Context())
 	view, found, err := s.d.Chunks.ChunkForUser(r.Context(), identity.Audiences, r.PathValue("id"))
@@ -260,6 +264,7 @@ type feedbackBody struct {
 	Comment string `json:"comment"`
 }
 
+// postFeedback records a thumbs-up or thumbs-down on an answer. Only the message's owner may rate it.
 func (s *Server) postFeedback(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.FromContext(r.Context())
 	msgID := r.PathValue("id")
@@ -299,6 +304,7 @@ func (s *Server) postFeedback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "recorded"})
 }
 
+// persist stores the question, the answer, and every retrieved passage, and returns the new message ID.
 func (s *Server) persist(ctx context.Context, convID, sub, question string, res answer.Result) (string, error) {
 	row := store.MessageRow{
 		ConversationID: convID,
@@ -334,6 +340,7 @@ func (s *Server) acquire(ctx context.Context) (func(), bool) {
 	}
 }
 
+// decodeQuestion reads and checks the question body. It writes the 400 response itself and returns false when the body is invalid.
 func decodeQuestion(w http.ResponseWriter, r *http.Request) (questionBody, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var body questionBody
@@ -353,6 +360,7 @@ func decodeQuestion(w http.ResponseWriter, r *http.Request) (questionBody, bool)
 	return body, true
 }
 
+// citationsJSON converts citations to their JSON shape, with the last-updated date as YYYY-MM-DD.
 func citationsJSON(cs []answer.Citation) []citationJSON {
 	out := make([]citationJSON, 0, len(cs))
 	for _, c := range cs {
@@ -367,11 +375,13 @@ func citationsJSON(cs []answer.Citation) []citationJSON {
 	return out
 }
 
+// unavailable logs a failed answer and responds 503.
 func (s *Server) unavailable(w http.ResponseWriter, r *http.Request, err error) {
 	s.logFailure("ask", r, err)
 	writeError(w, http.StatusServiceUnavailable, "answer unavailable")
 }
 
+// serverError logs an internal failure and responds 500 without exposing details.
 func (s *Server) serverError(w http.ResponseWriter, r *http.Request, op string, err error) {
 	s.logFailure(op, r, err)
 	writeError(w, http.StatusInternalServerError, "internal error")
@@ -382,6 +392,7 @@ func (s *Server) logFailure(op string, r *http.Request, err error) {
 	s.d.Logger.Error("request failed", "op", op, "route", r.Method+" "+r.URL.Path, "err", err)
 }
 
+// writeEvent writes one SSE event and flushes it so the client sees it immediately.
 func writeEvent(w http.ResponseWriter, rc *http.ResponseController, event string, data any) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -393,12 +404,14 @@ func writeEvent(w http.ResponseWriter, rc *http.ResponseController, event string
 	return rc.Flush()
 }
 
+// writeJSON writes v as a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError writes a JSON error body with the given status code.
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }

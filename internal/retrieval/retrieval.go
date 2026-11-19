@@ -116,6 +116,7 @@ func (s *Searcher) Hybrid(ctx context.Context, audiences []string, query string,
 	}, nil
 }
 
+// keyword runs the full-text leg of hybrid search, restricted to the caller's audiences and to current chunks.
 func (s *Searcher) keyword(ctx context.Context, audiences []string, tsq string, limit int) ([]Candidate, error) {
 	rows, err := s.pool.Pool.Query(ctx, `
 		SELECT `+candidateCols+`, ts_rank(c.tsv, to_tsquery('english', $2)) AS score`+fromClause+`
@@ -128,6 +129,7 @@ func (s *Searcher) keyword(ctx context.Context, audiences []string, tsq string, 
 	return collect(rows)
 }
 
+// vector runs the embedding-similarity leg of hybrid search, restricted to the caller's audiences and to current chunks.
 func (s *Searcher) vector(ctx context.Context, audiences []string, q []float32, limit int) ([]Candidate, error) {
 	rows, err := s.pool.Pool.Query(ctx, `
 		SELECT `+candidateCols+`, 1 - (c.embedding <=> $2) AS score`+fromClause+`
@@ -175,6 +177,7 @@ func (s *Searcher) ChunkForUser(ctx context.Context, audiences []string, chunkID
 	return v, true, nil
 }
 
+// collect reads candidate rows and closes them.
 func collect(rows pgx.Rows) ([]Candidate, error) {
 	defer rows.Close()
 	var out []Candidate

@@ -208,6 +208,7 @@ func parseDevTokens(raw string) (auth.StaticTokens, error) {
 	return out, nil
 }
 
+// intEnv reads an integer setting, falling back to def when it is unset.
 func intEnv(get func(string, string) string, key string, def int) (int, error) {
 	n, err := strconv.Atoi(get(key, strconv.Itoa(def)))
 	if err != nil {
@@ -216,6 +217,7 @@ func intEnv(get func(string, string) string, key string, def int) (int, error) {
 	return n, nil
 }
 
+// floatEnv reads a decimal setting, falling back to def when it is unset.
 func floatEnv(get func(string, string) string, key string, def float64) (float64, error) {
 	f, err := strconv.ParseFloat(get(key, strconv.FormatFloat(def, 'f', -1, 64)), 64)
 	if err != nil {

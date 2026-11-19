@@ -181,6 +181,7 @@ func (s *Service) Ask(ctx context.Context, req Request, onToken func(string) err
 	return s.finish(out, start), nil
 }
 
+// finish stamps the model and latency onto a result and makes its slices non-nil, so the JSON shape is stable.
 func (s *Service) finish(r Result, start time.Time) Result {
 	r.Model = s.Model
 	r.Latency = time.Since(start)
@@ -205,6 +206,7 @@ func BuildUserPrompt(question string, cands []retrieval.Candidate) string {
 	return b.String()
 }
 
+// toCitations turns retrieved passages into numbered citations, in rank order.
 func toCitations(cands []retrieval.Candidate) []Citation {
 	out := make([]Citation, 0, len(cands))
 	for i, c := range cands {
@@ -222,6 +224,7 @@ func toCitations(cands []retrieval.Candidate) []Citation {
 	return out
 }
 
+// sourceLabel names a passage by its document title and, when it has one, its heading path.
 func sourceLabel(c retrieval.Candidate) string {
 	if len(c.HeadingPath) == 0 {
 		return c.Title
@@ -291,6 +294,7 @@ func parseCitations(text string, n int) map[int]bool {
 	return used
 }
 
+// isDecline reports whether text is the standard "I don't know" decline, ignoring case and curly apostrophes.
 func isDecline(text string) bool {
 	norm := strings.ToLower(strings.ReplaceAll(text, "’", "'"))
 	return strings.Contains(norm, declineMarker)

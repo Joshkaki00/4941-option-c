@@ -76,6 +76,7 @@ func (h *Handler) Handler() http.Handler {
 	return mux
 }
 
+// requireAudience wraps next so that only identities carrying aud get through; others get 403.
 func requireAudience(aud string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := auth.FromContext(r.Context())
@@ -87,6 +88,7 @@ func requireAudience(aud string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// enqueueCorpus queues every corpus file for ingestion and reports how many it queued.
 func (h *Handler) enqueueCorpus(w http.ResponseWriter, r *http.Request) {
 	n, err := h.d.EnqueueCorpus(r.Context())
 	if err != nil {
@@ -105,6 +107,7 @@ type jobJSON struct {
 	LastError  string `json:"last_error"`
 }
 
+// getRun reports the status of one ingestion job, identified by its positive integer ID.
 func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
@@ -126,6 +129,7 @@ func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// summary reports how many messages ended in each outcome, plus the total.
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	counts, err := h.d.Store.OutcomeSummary(r.Context())
 	if err != nil {
@@ -144,6 +148,7 @@ type questionJSON struct {
 	Count    int    `json:"count"`
 }
 
+// unanswered lists the most-asked questions that were not answered from the handbook. limit defaults to 20.
 func (h *Handler) unanswered(w http.ResponseWriter, r *http.Request) {
 	limit := defaultUnansweredN
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -238,6 +243,7 @@ func ValidSourcePath(p string) bool {
 	return true
 }
 
+// writeJSON writes v as a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

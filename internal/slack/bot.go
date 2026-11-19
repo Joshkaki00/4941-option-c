@@ -122,6 +122,7 @@ func (b *Bot) Run(ctx context.Context) {
 	wg.Wait()
 }
 
+// work runs one worker until ctx is cancelled, answering queued questions one at a time.
 func (b *Bot) work(ctx context.Context) {
 	for {
 		select {
@@ -161,6 +162,7 @@ func (b *Bot) process(ctx context.Context, j Job) {
 	}
 }
 
+// persist records the Slack exchange under the user's "slack:" subject, for history and analytics. Failures are logged rather than returned, so they never block the reply.
 func (b *Bot) persist(ctx context.Context, j Job, res answer.Result) {
 	ctx = context.WithoutCancel(ctx)
 	sub := "slack:" + j.User

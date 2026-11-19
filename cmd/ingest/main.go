@@ -15,6 +15,7 @@ import (
 	"github.com/Joshkaki00/4941-option-c/internal/ingest"
 )
 
+// main ingests the corpus and exits non-zero on failure.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "ingest:", err)
@@ -22,6 +23,7 @@ func main() {
 	}
 }
 
+// run parses flags, enqueues every .md file under -dir, drains the queue, and prints the counts.
 func run() error {
 	dir := flag.String("dir", "testdata/handbook", "corpus directory of .md files with front matter")
 	concurrency := flag.Int("concurrency", 2, "parallel ingestion jobs")

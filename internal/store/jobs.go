@@ -80,4 +80,5 @@ func (s *Store) FinishJob(ctx context.Context, j Job, runErr error, maxAttempts 
 	return err
 }
 
+// errorsIsNoRows reports whether err is pgx's no-rows error.
 func errorsIsNoRows(err error) bool { return err == pgx.ErrNoRows }

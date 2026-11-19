@@ -78,6 +78,7 @@ func (o *OIDC) Verify(ctx context.Context, raw string) (Identity, error) {
 	return Identity{Subject: tok.Subject, Audiences: AudiencesFor(stringList(claims[o.groupsClaim]))}, nil
 }
 
+// stringList reads a group claim that may be a JSON array or a comma-separated string, and returns its strings.
 func stringList(v any) []string {
 	switch t := v.(type) {
 	case []any:
@@ -132,6 +133,7 @@ func Require(v Verifier, next http.Handler) http.Handler {
 	})
 }
 
+// writeUnauthorized writes the 401 response, with a Bearer challenge and a JSON error body.
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="ask-the-handbook"`)
 	w.Header().Set("Content-Type", "application/json")

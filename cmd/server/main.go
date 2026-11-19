@@ -23,6 +23,7 @@ import (
 	"github.com/Joshkaki00/4941-option-c/internal/slack"
 )
 
+// main runs the server and exits non-zero if it fails to start or stops with an error.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "server:", err)
@@ -30,6 +31,7 @@ func main() {
 	}
 }
 
+// run loads and validates config, wires the runtime, serves HTTP and the Slack bot, and shuts down cleanly on SIGINT or SIGTERM.
 func run() error {
 	if err := config.LoadDotEnv(".env"); err != nil {
 		return err

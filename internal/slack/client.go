@@ -57,6 +57,7 @@ type slackReply struct {
 	TS    string `json:"ts"`
 }
 
+// call posts a JSON request to a Slack Web API method and returns the reply. A reply with ok=false becomes an error that names Slack's error code.
 func (c *APIClient) call(ctx context.Context, method string, payload map[string]string) (slackReply, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {

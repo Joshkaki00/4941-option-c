@@ -43,6 +43,7 @@ func (h *Hash) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	return out, nil
 }
 
+// one embeds a single text. Lowercased tokens are hashed into buckets with a sign, then the vector is normalized to unit length. Empty text gives the zero vector.
 func (h *Hash) one(text string) []float32 {
 	vec := make([]float32, h.Dim)
 	tokens := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {

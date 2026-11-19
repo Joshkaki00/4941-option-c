@@ -33,6 +33,7 @@ type block struct {
 	lines []string
 }
 
+// text joins the block's lines back into one string.
 func (b block) text() string { return strings.Join(b.lines, "\n") }
 
 type section struct {
@@ -57,6 +58,7 @@ func Split(sourceID, title, body string) []Chunk {
 	return out
 }
 
+// parseSections splits a Markdown body into sections, each carrying the heading path it sits under. The first H1 is the document title and is skipped.
 func parseSections(body string) []section {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 
@@ -117,8 +119,10 @@ func parseSections(body string) []section {
 	return sections
 }
 
+// isTableLine reports whether a line is part of a Markdown table.
 func isTableLine(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "|") }
 
+// newBlock classifies a run of lines as a table, a list, or prose by its first line.
 func newBlock(lines []string) block {
 	first := lines[0]
 	switch {
@@ -156,6 +160,7 @@ func pieces(blocks []block) []block {
 	return out
 }
 
+// packSection packs a section's blocks into chunks under the size budget. Each chunk's content starts with the title and heading-path prefix.
 func packSection(sourceID, title string, sec section, occurrence int) []Chunk {
 	prefix := title
 	if len(sec.path) > 0 {
@@ -184,6 +189,7 @@ func packSection(sourceID, title string, sec section, occurrence int) []Chunk {
 	return out
 }
 
+// makeChunk builds one chunk from its blocks. Mixed block kinds are labelled prose.
 func makeChunk(sourceID string, path []string, ordinal, occurrence int, prefix string, blocks []block) Chunk {
 	kind := blocks[0].kind
 	texts := make([]string, 0, len(blocks))
@@ -201,6 +207,7 @@ func makeChunk(sourceID string, path []string, ordinal, occurrence int, prefix s
 	}
 }
 
+// stableID derives a chunk ID from the source, heading path, ordinal, and occurrence, so re-ingesting unchanged text gives the same ID.
 func stableID(sourceID string, path []string, ordinal, occurrence int) string {
 	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", sourceID, strings.Join(path, "\x1f"), ordinal, occurrence)
 	sum := sha256.Sum256([]byte(key))

@@ -102,6 +102,7 @@ func BuildVerifier(ctx context.Context, cfg config.Config) (auth.Verifier, error
 	return cfg.Tokens, nil
 }
 
+// modelName returns the model name to report for an answer: the Anthropic model, or "retrieval-only" when no LLM is configured.
 func modelName(cfg config.Config) string {
 	if cfg.LLMProvider == "none" {
 		return "retrieval-only"

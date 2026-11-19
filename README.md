@@ -77,8 +77,10 @@ Setup in Slack (api.slack.com/apps):
 
 1. Turn on **Socket Mode** and create an app-level token with the `connections:write` scope. Copy it into `SLACK_APP_TOKEN` (`xapp-...`).
 2. Under **OAuth & Permissions**, add bot scopes `app_mentions:read`, `chat:write`, `im:history`, `im:read`, and install the app to the workspace. Copy the **Bot User OAuth Token** into `SLACK_BOT_TOKEN` (`xoxb-...`).
-3. Under **Event Subscriptions**, subscribe to the bot events `app_mention` and `message.im`. Socket Mode needs no request URL.
+3. Under **Event Subscriptions**, turn events on and subscribe to the bot events `app_mention` and `message.im`. Socket Mode needs no request URL. Then click **Reinstall to Workspace**, because Slack applies new subscriptions only after a reinstall.
 4. Invite the bot to any channel it should answer in (`/invite @<bot>`). Slack refuses to post to a channel the bot hasn't joined (`not_in_channel`).
+
+**Troubleshooting:** if the bot never replies, check that `app_mention` is listed under bot events and that the app was reinstalled after you added it. Mentions only count when they use Slack's `@` picker. Typed names don't trigger `app_mention`.
 
 The bot reads its own user ID at startup with `auth.test`, so no other values are needed. The server refuses to start if only one of the two tokens is set, and it exits if `auth.test` rejects the bot token.
 
@@ -117,7 +119,7 @@ The golden set lives in [`testdata/golden/v1.json`](testdata/golden/v1.json). Th
 | `internal/answer` | Policy checks, weak-evidence gate, grounded prompt, citations |
 | `internal/auth`, `internal/httpapi` | Bearer auth and the HTTP handlers |
 | `internal/admin` | Admin routes, the signed webhook, and analytics |
-| `internal/slack` | Slack event intake, signature checks, the worker pool, and replies |
+| `internal/slack` | Socket Mode listener, the worker pool, and Slack replies |
 | `web/` | Browser UI in Yew (Rust → WASM), streaming answers. `make web-test`, `make web` |
 | `spec.md`, `proposal.md` | Acceptance criteria and the design reference |
 
@@ -125,6 +127,6 @@ The golden set lives in [`testdata/golden/v1.json`](testdata/golden/v1.json). Th
 
 Built: ingestion (queue, background worker, admin runs, signed webhook), hybrid retrieval, grounded answers with citations and SSE streaming, declines, feedback, the retrieval-only tier, admin analytics, a Slack bot with ack-then-answer threads, and a Yew web UI that streams answers.
 
-Verified: unit and race tests for every package, DB-backed store tests, the privacy gate, the golden eval against the Anthropic API (7/7), the smoke script, and live checks of the admin routes, the signed webhook, and the SSE stream.
+Verified: unit and race tests for every package, DB-backed store tests, the privacy gate, the golden eval against the Anthropic API (7/7), the smoke script, and live checks of the admin routes, the signed webhook, and the SSE stream. The Slack bot works live over Socket Mode: it answers mentions in a channel with cited answers, declines questions the handbook doesn't cover, and routes sensitive questions to a human.
 
-Not verified: the Slack bot running live over Socket Mode (covered by fake-client and channel tests only; the bot token passes `auth.test`), the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.
+Not verified: the Yew UI in a browser, and a live test against a real identity provider. Not built: a local Ollama generator tier.

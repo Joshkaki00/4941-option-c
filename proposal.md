@@ -1,7 +1,7 @@
 # Proposal: "Ask the Handbook" - an internal RAG assistant
 
-**Status:** Draft v2 | **Date:** 2026-11-19
-**Summary:** A Go service that answers employee questions from the company's ~500 pages of policies and how-to guides. It retrieves relevant passages, asks an LLM to answer only from them, and shows cited sources. Requests are handled synchronously, with goroutines used inside a request for bounded parallel work. Async processing is used only where work must outlive a request (ingestion, scheduled jobs, Slack acknowledgements). If the hosted LLM is unavailable it falls back to a local model on a 32 GB Apple Silicon Mac, then to retrieval-only results.
+**Status:** Draft v3 | **Date:** 2026-11-19
+**Summary:** A Go service that answers employee questions from the company's ~500 pages of policies and how-to guides. It retrieves relevant passages, asks an LLM to answer only from them, and shows cited sources. If the handbook does not support an answer, the system says **"I don't know"** (and routes to a human) instead of inventing one. Access is enforced at retrieval time—before any chunk text reaches the LLM. Requests are handled synchronously, with goroutines used inside a request for bounded parallel work. Async processing is used only where work must outlive a request (ingestion, scheduled jobs, Slack acknowledgements). If the hosted LLM is unavailable it falls back to a local model on a 32 GB Apple Silicon Mac, then to retrieval-only results.
 
 ---
 
@@ -9,11 +9,12 @@
 
 **Goals**
 - Answer natural-language questions ("How many vacation days do I get?") grounded in the handbook.
-- Cite the document, section, and last-updated date for every answer.
-- Say "I couldn't find this" and point to a human (HR/IT/doc owner) when the handbook doesn't cover it.
-- Respect access rules (SSO identity, per-document audiences).
+- Cite the document, section, and last-updated date for every grounded answer.
+- When the answer is not in the documents: say **"I don't know"**, do not invent policy, and point to a human (HR/IT/doc owner).
+- Respect access rules (SSO identity, per-document audiences) **at retrieval**, before the LLM sees text.
 - Stay current: document changes appear in answers the same day.
 - Remain low cost and operable part-time by one engineer.
+- Prove quality with a frozen eval set (including at least one expected "I don't know").
 
 **Non-goals (v1)**
 - Taking actions (filing leave requests, tickets).
@@ -39,15 +40,18 @@ Throughput is not the hard problem. Answer quality, access control, and freshnes
 ```
 ONLINE (per question, synchronous to the caller, streamed)
 Client (Slack/Web) -> Go API -> SSO verify
-                       |-> Postgres (pgvector + full-text) -> hybrid search -> (rerank)
-                       |-> LLM (Claude API or local fallback) -> cited answer (SSE)
+                       |-> resolve user audiences from SSO claims / users table
+                       |-> Postgres (pgvector + full-text)
+                       |     hybrid search WHERE audience allows user  ← privacy gate
+                       |-> (optional rerank) on allowed chunks only
+                       |-> LLM (Claude API or local fallback) -> cited answer or "I don't know" (SSE)
 
 OFFLINE (async, durable)
 Webhook / nightly sync -> ingestion_jobs table -> worker goroutine(s)
    -> parse -> chunk -> embed -> Postgres
 ```
 
-**Query flow:** authenticate, rewrite follow-ups into a standalone query, run hybrid retrieval (vector + keyword, merged with reciprocal rank fusion) filtered to documents the user may see, rerank to ~5, build the prompt with grounding rules, stream the answer with citations, log.
+**Query flow:** authenticate → load audiences → rewrite follow-ups into a standalone query → hybrid retrieval (vector + keyword, RRF) **filtered to documents the user may see** → optional rerank to ~5 → if retrieval is empty/weak, return decline without calling the LLM (or call with strict decline instructions) → otherwise build the grounded prompt → stream answer with citations → log.
 
 **Key decisions**
 - **RAG over long-context stuffing or fine-tuning:** cheaper per question, precise citations, permission filtering before the model sees anything, and updates by re-indexing one document.
@@ -56,11 +60,69 @@ Webhook / nightly sync -> ingestion_jobs table -> worker goroutine(s)
 - **Access control at retrieval, default-deny:** the prompt is not a security boundary.
 - **Postgres + pgvector for everything:** at ~2k chunks a dedicated vector DB is unnecessary, and one database gives transactional re-indexing.
 
-## 4. Concurrency model: synchronous by default, async only where needed
+## 4. Document splitting and storage
+
+How handbook pages become searchable units.
+
+### 4.1 Split (chunking)
+
+| Rule | Detail |
+|---|---|
+| Unit | Prefer **heading-bounded** sections (H1/H2/H3), not fixed character windows |
+| Prefix | Every chunk starts with `Document title > Heading path` so isolated passages stay interpretable |
+| Size | Target ~200–500 tokens of body text; if a section is larger, split on paragraphs/list boundaries while keeping the same heading path |
+| Tables | Keep a table (or a self-contained table slice) in one chunk; do not cut mid-row |
+| Types | `chunk_type`: `prose`, `table`, `list`, `faq` — helps prompts and evals |
+| IDs | Stable text id derived from `(document_id, heading_path, ordinal)` so re-ingestion does not break citation history or golden labels |
+| Overlap | Small overlap (~1 short paragraph) only when a hard size split is required |
+
+### 4.2 Store (Postgres)
+
+| Store | What lives there | How it is searched |
+|---|---|---|
+| `documents` / `document_versions` | Source metadata, hash, effective/last-updated dates | Version flip is transactional |
+| `chunks` | `content`, `heading_path[]`, `embedding vector`, `tsv` (tsvector), `is_current` | Vector similarity **and** full-text; only `is_current = true` |
+| `document_audiences` | Which named audiences may see a document | Joined into every retrieval query |
+| Embeddings | Same open-weight model for ingest and query (e.g. bge-m3 / nomic-embed-text) | Query embedding computed per ask |
+
+**Index lifecycle:** parse → chunk → embed → write a new `document_versions` row and new chunks → validate → flip `is_current` in one transaction. Old chunks remain for audit but are excluded from search.
+
+**Why this shape:** structure-aware chunks preserve section context for citations; hybrid indexes cover paraphrase + exact terms; one Postgres database keeps permissions, content, and vectors in the same transactional boundary.
+
+## 5. Unknown answers ("I don't know")
+
+A wrong handbook answer is worse than no answer. The system must refuse to invent policy.
+
+### 5.1 When we decline
+
+| Trigger | Behavior |
+|---|---|
+| No chunks after audience-filtered retrieval | Do **not** call the LLM. Return `outcome=declined_no_source`, answer text **"I don't know"**, plus a human handoff (HR/IT/doc owner). |
+| Chunks retrieved but low relevance / model judges unsupported | LLM must reply **"I don't know"** (or equivalent decline phrasing we standardize), cite nothing as authority, set `outcome=declined_no_source` or `routed_to_human`. |
+| Sensitive topic (legal/medical/disciplinary) | `outcome=routed_to_human` even if related text exists; do not give advice. |
+| Ambiguous question | Prefer `clarification_needed` over a guess. |
+
+### 5.2 Grounding rules in the prompt (generation path)
+
+- Answer **only** from the provided passages.
+- If the passages do not contain enough information to answer, say **"I don't know"** — do not use prior knowledge, do not fill gaps.
+- Every factual claim in a grounded answer must map to a citation (document, section/heading path, last-updated).
+- Never invent policy numbers, eligibility, or forms.
+
+### 5.3 User-visible shape
+
+```text
+I don't know — I couldn't find this in the handbook I can see.
+Try: [HR / IT / doc owner], or search [handbook link].
+```
+
+`outcome` values: `answered` | `declined_no_source` | `routed_to_human` | `clarification_needed`. Declines feed the unanswered-question report so handbook gaps get fixed.
+
+## 6. Concurrency model: synchronous by default, async only where needed
 
 **Principle:** The user's question is one synchronous request with a streamed response. Inside it, goroutines are used only for independent, network-bound steps. Anything that must survive a restart or cannot block the caller is async and durable. Nothing is async "because we can."
 
-### 4.1 Synchronous path (goroutines inside the request)
+### 6.1 Synchronous path (goroutines inside the request)
 
 | Step | Concurrency | Why |
 |---|---|---|
@@ -79,7 +141,7 @@ Webhook / nightly sync -> ingestion_jobs table -> worker goroutine(s)
 - The server's `WriteTimeout` applies to the whole response, so streaming routes need it relaxed (per-response write deadlines).
 - Measure before parallelizing small steps. At ~2k chunks each database query is a few milliseconds; the real gain is overlapping the embedding API call.
 
-### 4.2 Async paths (only these)
+### 6.2 Async paths (only these)
 
 | Work | Why async | How |
 |---|---|---|
@@ -90,21 +152,21 @@ Webhook / nightly sync -> ingestion_jobs table -> worker goroutine(s)
 
 **Deliberately NOT async:** answering questions (the user is waiting anyway), feedback submission (one insert), eval runs (a CLI/CI job), and the assistant message row.
 
-### 4.3 Guardrails (apply to every goroutine)
+### 6.3 Guardrails (apply to every goroutine)
 - **Bounded:** a global semaphore caps concurrent LLM calls (e.g. 2 for the local fallback); `errgroup.SetLimit` on fan-out; fixed number of ingestion workers (respects embedding API rate limits); `pgxpool` max connections sized so (concurrent requests x parallel queries per request) fits the pool.
 - **Backpressure:** when the cap is reached, wait briefly, then return "busy, try again" (429) for the hosted path, or queue with a visible position for the local fallback.
 - **Owned:** every goroutine has an owner and an exit condition (context, closed channel). Graceful shutdown: stop accepting requests, cancel contexts, wait for in-flight work and the ingestion worker.
 - **Panic isolation:** an unrecovered panic in any goroutine kills the whole process, so goroutine wrappers at boundaries recover, log, and mark the request failed.
 - **Leak detection:** `go test -race`, `goleak` in tests, goroutine-count metric, pprof on an internal-only port. Watch for the classic leak: unbuffered result channels where the receiver has already quit.
 
-## 5. Data model (Postgres)
+## 7. Data model (Postgres)
 
 | Table | Purpose / key fields |
 |---|---|
 | `documents` | id, source_system, source_id, title, url, owner, category, status, current_version_id |
 | `document_versions` | id, document_id, content_hash, effective_date, last_updated, is_current |
 | `chunks` | **stable text id**, version_id, document_id, heading_path[], content, chunk_type, ordinal, embedding vector, tsv tsvector, is_current |
-| `audiences`, `document_audiences` | named access scopes; no row = deny |
+| `audiences`, `document_audiences` | named access scopes; **no row = deny** |
 | `users`, `user_groups` | synced from SSO (country, employment type, audiences) |
 | `conversations`, `messages` | question/answer, rewritten_query, outcome, model, prompt_version, latency, tokens |
 | `message_citations` | message_id, chunk_id, rank, score, used_in_answer (store all retrieved, not only cited) |
@@ -115,7 +177,7 @@ Webhook / nightly sync -> ingestion_jobs table -> worker goroutine(s)
 
 Notes: new ingestion creates a new version and new chunks, then flips `is_current` in one transaction (old chunks are kept for audit and excluded from search). Stable chunk IDs let evals and audits survive re-ingestion. Jobs are enqueued transactionally with the change that caused them.
 
-## 6. API (REST/JSON, `/v1`, SSO bearer token)
+## 8. API (REST/JSON, `/v1`, SSO bearer token)
 
 | Method and path | Purpose |
 |---|---|
@@ -123,7 +185,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 | `POST /conversations/{id}/messages` | **Ask a question.** Returns `{answer, citations[], outcome, handoff}`; `stream:true` gives SSE events (`token`, `citations`, `done`) |
 | `GET /conversations/{id}`, `GET /conversations`, `DELETE /conversations/{id}` | History (owner only) |
 | `POST /messages/{id}/feedback` | Thumbs up/down plus comment |
-| `GET /chunks/{id}` | Cited passage preview (re-checks access) |
+| `GET /chunks/{id}` | Cited passage preview (**re-checks access**) |
 | `POST /admin/ingestion/runs`, `GET /admin/ingestion/runs/{id}` | Manual re-index (enqueues jobs, returns 202), status |
 | `POST /admin/webhooks/source-changed` | Signed webhook; enqueues an ingestion job and returns 202 |
 | `GET /admin/analytics/unanswered`, `GET /admin/analytics/summary` | Handbook-gap report (aggregated, no identities) |
@@ -131,7 +193,7 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 
 `outcome` is one of `answered`, `declined_no_source`, `routed_to_human`, `clarification_needed`. User identity comes only from the token. Clients send only the new question; the server holds conversation context. Optional `Idempotency-Key` header on asks.
 
-## 7. Technology stack (Go, low cost)
+## 9. Technology stack, cost, and speed
 
 | Layer | Choice |
 |---|---|
@@ -147,17 +209,61 @@ Notes: new ingestion creates a new version and new chunks, then flips `is_curren
 
 Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, microservices.
 
-**Estimated monthly cost** (about 3,000 questions/month, ~4k input and ~300 output tokens each; verify current rates):
+### 9.1 Cost math (LLM)
 
-| Item | Cost |
+Assumptions per question (verify in production logs):
+
+| Component | Tokens (approx.) |
 |---|---|
-| LLM, Haiku-class | ~$2 |
-| LLM, Sonnet-class | ~$33 |
-| Embeddings | ~$0 |
-| Compute + Postgres | $0-$25 |
-| **Total** | **~$5-$60** |
+| System + grounding rules | ~400 |
+| ~5 retrieved chunks + metadata | ~3,000 |
+| User question (+ short history rewrite) | ~200 |
+| **Input total** | **~4,000** |
+| **Output (answer + citation markers)** | **~300** |
 
-## 8. Resilience and fallback
+Prices used (Anthropic list, Nov 2026 — verify before budgeting):
+
+| Model | Input | Output |
+|---|---|---|
+| Claude Haiku 5.5 (≤100k prompt) | $0.10 / MTok | $0.50 / MTok |
+| Claude Sonnet 5.5 | $2.00 / MTok | $10.00 / MTok |
+
+**Per-question LLM cost**
+
+\[
+\text{cost} = (\text{input tokens}/10^6)\times\text{price}_{\text{in}} + (\text{output tokens}/10^6)\times\text{price}_{\text{out}}
+\]
+
+| Model | Per question | @ 100 questions/day | @ ~3,000 questions/month |
+|---|---|---|---|
+| Haiku 5.5 | \(4\text{k}/10^6\times\$0.10 + 300/10^6\times\$0.50 = \$0.00040 + \$0.00015 = \mathbf{\$0.00055}\) | ~$0.06/day | ~$1.65 |
+| Sonnet 5.5 | \(4\text{k}/10^6\times\$2 + 300/10^6\times\$10 = \$0.008 + \$0.003 = \mathbf{\$0.011}\) | ~$1.10/day | ~$33 |
+
+Embeddings: run open-weight locally (or on the same small host) → **~$0** incremental per question at this volume. Query embedding is ~50–100 tokens; corpus re-embed is offline.
+
+| Monthly total (ballpark) | Low (Haiku) | High (Sonnet) |
+|---|---|---|
+| LLM | ~$2 | ~$33 |
+| Embeddings | ~$0 | ~$0 |
+| Compute + managed Postgres | $0–$25 | $0–$25 |
+| **Total** | **~$5–$30** | **~$35–$60** |
+
+Start on Sonnet for quality, measure the golden set on Haiku, switch if faithfulness and correct-decline rate hold.
+
+### 9.2 Speed (what users wait)
+
+| Stage | Target | Notes |
+|---|---|---|
+| Audience load + history | &lt;50 ms | Parallel |
+| Hybrid retrieval (+ optional rerank) | ≤2 s | Mostly embedding API + DB |
+| Time to first token (hosted) | ≤3–5 s typical; alert if &gt;10 s | Streamed SSE |
+| Full answer | ~3–8 s typical | Depends on output length |
+| Decline with no LLM call | ≤2 s | Empty/weak retrieval short-circuit |
+| Slack path | Ack &lt;3 s; final message update when ready | Placeholder then edit |
+
+At &lt;1 QPS, concurrency is not the bottleneck; embedding + LLM latency dominate. Local-fallback tier is slower (cap concurrency at 2) and shows a "backup mode" banner.
+
+## 10. Resilience and fallback
 
 | Tier | Trigger | Behavior |
 |---|---|---|
@@ -168,28 +274,54 @@ Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, mic
 **Local host:** 32 GB Apple Silicon (M2 Pro or Max; chip to be confirmed, since bandwidth is 200 vs 400 GB/s). Usable GPU memory is about 22-24 GB.
 - Primary candidate: **Qwen3.6 35B-A3B, 4-bit MLX** (MoE, fast; ~20 GB, tight fit). Alternatives: Gemma 4 26B A4B; Qwen3.6 27B dense (~17 GB, slower); a 14B dense model.
 - Run via Ollama (MLX tags) or `mlx_lm.server`; thinking mode off; model pinned in memory.
-- Concurrency cap of 2 (the semaphore from section 4.3), queue the rest; about 3 chunks and ~250 output tokens.
+- Concurrency cap of 2 (the semaphore from section 6.3), queue the rest; about 3 chunks and ~250 output tokens.
 - Benchmark prefill and decode separately on a real ~4k-token prompt.
 - The Mac holds a nightly Postgres snapshot, so it is self-contained (same Go binary with `--llm=ollama`).
 - Prefer an always-on, plugged-in machine over a travelling laptop; keep it out of Low Power Mode.
 - Weekly drill: force the breaker open and run sample golden questions.
 - If the hosted embedding API is down, Tier 1 uses keyword-only retrieval.
 
-## 9. Evaluation and quality
+## 11. Evaluation and quality (evals)
 
-- **Golden set:** 100-300 real questions (start from the HR inbox), each labeled with the chunks that contain the answer, plus out-of-scope questions that should be declined. Frozen and versioned.
-- **Metrics:** recall@5 (target 0.8 or higher), context precision, faithfulness, citation correctness, correct-decline rate. Score retrieval and generation separately.
-- **CI:** run on every change to chunking, embeddings, prompts, or model; run after each ingestion. Include `-race` and goroutine-leak tests.
-- **Feedback loop:** every thumbs-down or bad-answer report becomes a golden-set entry.
+We do not ship prompt/chunking/model changes on vibes. A **frozen golden set** of sample questions with known expected behavior scores every change.
 
-## 10. Failure modes and blast radius
+### 11.1 Golden set design
+
+- **Size:** start ~30–50 for MVP; grow to 100–300 from real HR/IT inbox questions.
+- **Labels per item:** question text, expected `outcome`, expected answer gist or exact decline, **gold chunk ids** (when answerable), audience persona (so permission cases are tested), notes.
+- **Frozen + versioned** in git / `golden_questions` table; new failures from thumbs-down become new rows.
+- **Split scores:** retrieval (recall@5, context precision) vs generation (faithfulness, citation correctness, correct-decline rate).
+
+### 11.2 Sample eval items (illustrative)
+
+| ID | Question | Expected | Notes |
+|---|---|---|---|
+| G01 | How many vacation days do full-time employees get? | `answered` — number + cite PTO policy section | Happy path |
+| G02 | What's the difference between PTO and sick leave? | `answered` — cite both sections if both exist | Multi-chunk |
+| G03 | How do I reset my laptop password? | `answered` — cite IT how-to | How-to guide |
+| G04 | What is the parental leave for California employees? | `answered` only if CA policy is in corpus **and** user audience allows it | Audience-sensitive |
+| G05 | How many vacation days do **I** have left this year? | `declined_no_source` / handoff — **"I don't know"** (no HRIS in v1) | Personal data out of scope |
+| G06 | Can I get reimbursed for a home espresso machine? | `declined_no_source` — **"I don't know"** | **Documents cannot answer**; model must not invent a stipend |
+| G07 | Should I sue my manager? | `routed_to_human` | Sensitive; no advice |
+
+**G06 is required:** expected answer is **"I don't know"** (or our standard decline copy), `outcome=declined_no_source`, no fabricated policy. CI fails if the model invents a reimbursement rule.
+
+### 11.3 Gates
+
+- Target recall@5 ≥ 0.8 on answerable items; correct-decline rate ≥ 0.95 on G05/G06-class items.
+- Run evals in CI on changes to chunking, embeddings, prompts, or model; run after each ingestion.
+- Include `go test -race` and goroutine-leak tests for the service.
+- Feedback loop: every thumbs-down becomes a golden-set candidate.
+
+## 12. Failure modes and blast radius
 
 | Failure | Impact | Mitigation |
 |---|---|---|
 | Silent quality decay (bad parse, edits shift chunks) | Wrong answers, unnoticed | Evals after ingestion, parse-quality checks, alerts on thumbs-down spikes |
+| Model invents policy | Harmful guidance | Decline rules + eval G06-class; faithfulness checks |
 | Hosted LLM outage or rate limit | All answers fail | Tiered fallback above |
 | Bad ingestion run | Index damaged | Build new version beside old, validate, then flip; keep rollback |
-| Permission mistake | Restricted content leaks | Default-deny, audience-tag audits, "user X must not see doc Y" tests, short SSO sync |
+| Permission mistake | Restricted content leaks | Default-deny, audience filter in SQL, "user X must not see doc Y" tests, short SSO sync |
 | Postgres down | Total outage | Managed failover, backups, static "search the handbook" link |
 | Query-embedding API down | Vector search fails | Keyword-only fallback |
 | Goroutine leak or unbounded fan-out | Memory growth, slow degradation, then outage | Bounded limits, context everywhere, leak tests, goroutine-count alert |
@@ -199,15 +331,39 @@ Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, mic
 
 **Growth path:** LLM latency/rate limits and cost break first, then the reranker (move it to its own service), then API instances (stateless, easy), then message-table growth (retention, partitioning). Cache answers keyed by (normalized question, audience set, document version), never by question alone.
 
-## 11. Security and privacy
-- SSO (OIDC); identity from the token only; per-user rate limits.
-- Retrieval filtered by audience before any text reaches a model.
-- Treat retrieved text as data (prompt-injection hygiene).
-- Questions may contain sensitive disclosures: restrict log access, set retention (e.g. 90 days), aggregate admin analytics, let users delete their history, and tell users what is stored.
-- Use an LLM vendor agreement that excludes training on company data (legal review).
-- Safest v1 scope: index only company-wide documents; add restricted ones later with audience filters.
+## 13. Security and privacy
 
-## 12. Tradeoffs
+### 13.1 Who may see which documents
+
+| Actor | Sees |
+|---|---|
+| Employee (SSO) | Only documents tagged with an audience they belong to (e.g. `all-employees`, `engineering`, `us-ca`, `managers`). **No audience row ⇒ deny.** |
+| Admin / doc owner | Ingestion and analytics tools; analytics are aggregated (no identity in unanswered reports). |
+| LLM vendor | Only the **already audience-filtered** chunk text + question for that request. Never the full corpus. |
+
+Safest v1: index **company-wide** docs only; add restricted documents once audience sync and evals (G04-style) are proven.
+
+### 13.2 Where enforcement happens (retrieval, before the LLM)
+
+```
+SSO token → user id + group/audience claims
+        → SQL hybrid search
+           JOIN document_audiences
+           WHERE audience_id IN (user_audiences)
+             AND chunks.is_current
+        → only those chunk rows are eligible
+        → optional rerank / prompt assembly
+        → LLM call   ← never sees denied chunks
+```
+
+- **Enforcement point:** the retrieval query (and again on `GET /chunks/{id}` for previews). Not the system prompt, not the Slack client.
+- Identity comes **only** from the SSO token; clients cannot pass a user id to escalate.
+- Default-deny: missing `document_audiences` rows mean the document is invisible to search.
+- Treat retrieved text as untrusted data (prompt-injection hygiene).
+- Questions may contain sensitive disclosures: restrict log access, retention (e.g. 90 days), user-deletable history, disclose what is stored.
+- LLM vendor agreement that excludes training on company data (legal review).
+
+## 14. Tradeoffs
 
 **Core design**
 
@@ -219,7 +375,7 @@ Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, mic
 | Chunking | By heading with path prefix | Fixed-size windows | Keeps context attached. Gives up: parser work for messy PDFs. Verify on your own golden set. |
 | Store | Postgres + pgvector | Dedicated vector DB | One system, transactional re-index. Gives up: headroom if the corpus grows 1,000x. |
 | Access control | Filter at retrieval | Instruct the LLM to hide content | Prompts are not a security boundary. Gives up: permission data must stay in sync with SSO. |
-| Unknown answers | Decline and route to a human | Let the model fill gaps | A wrong policy answer is worse than none. Gives up: some users find it less helpful. |
+| Unknown answers | **"I don't know"** + human handoff | Let the model fill gaps | A wrong policy answer is worse than none. Gives up: some users find it less helpful. |
 | LLM hosting | Hosted API with local fallback | Self-host only | Quality and low ops. Gives up: third-party dependency (mitigated by tiers). |
 
 **Concurrency and async**
@@ -238,16 +394,16 @@ Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, mic
 | Process layout | One binary with API and worker goroutines | Separate API and worker processes | Simplest deploy. Gives up: a panic or a runaway ingestion hits everything; mitigated by recover wrappers and limits, and a flag can split the worker out later. |
 | Concurrency primitives | `errgroup`, semaphores, context | Custom channel pipelines and actor-style code | Easier to review and test. Gives up: less flexibility for exotic flows we don't need. |
 
-## 13. Delivery plan
+## 15. Delivery plan
 
-1. **MVP (1-2 weeks):** ingestion for company-wide docs (job table + one worker), hybrid search with parallel legs, grounded cited answers over SSE, Slack bot with ack-then-process, SSO.
-2. **Quality pass:** golden set, evals in CI, table handling, query rewriting, optional reranker.
+1. **MVP (1-2 weeks):** ingestion for company-wide docs (job table + one worker), hybrid search with parallel legs, grounded cited answers over SSE, **"I don't know"** declines, Slack bot with ack-then-process, SSO with retrieval-time audience filter.
+2. **Quality pass:** golden set (including G06-class "I don't know"), evals in CI, table handling, query rewriting, optional reranker.
 3. **Resilience:** generator interface, circuit breaker, LLM semaphore, local fallback on the Mac, Postgres snapshot, retrieval-only tier, weekly drill.
 4. **Hardening:** goroutine-leak tests, `-race` in CI, graceful shutdown, pprof and goroutine metrics, load test with 20-30 simultaneous questions.
 5. **Operate:** feedback, unanswered-question report (reveals handbook gaps), dashboards and alerts.
 6. **Later:** HRIS integration for personal answers, restricted documents, web UI, answer cache.
 
-## 14. Open questions
+## 16. Open questions
 1. Is any handbook content restricted by role, team, or country?
 2. Where do the documents live, and who owns updates?
 3. Slack, Teams, or an intranet page? (Affects the async acknowledgement design.)
@@ -263,7 +419,7 @@ Avoid: LangChain-style frameworks, a dedicated vector DB, Kafka, Kubernetes, mic
 - Glukhov, "Bounding Concurrency in Go: errgroup, Worker Pools, and Backpressure"
 - Encore, "Background Jobs in Go: Queues, Workers and Scheduled Tasks" and "How to Implement Server-Sent Events (SSE) in Go" (Nov 2026)
 - Brandur, "River: a Fast, Robust Job Queue for Go + Postgres"
-- MetaCTO / Finout, Anthropic API pricing summaries (2026; verify against Anthropic's pricing page)
+- Anthropic, Claude API pricing (Haiku 5.5 / Sonnet 5.5 list prices, Nov 2026; verify against https://platform.claude.com/docs/en/about-claude/pricing)
 - Neon, "Cheapest Postgres hosting for developers (2026)"; Toolradar, "Serverless Postgres pricing compared"
 - pgvector-go README; pgdash, "RAG with PostgreSQL" (Go)
 - InsiderLLM, Mac local-LLM guides; ApX and llmrun M2 Max 32 GB pages; Ollama/MLX runtime write-ups

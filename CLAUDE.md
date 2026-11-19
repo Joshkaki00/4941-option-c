@@ -2,7 +2,7 @@
 
 Internal RAG assistant for a ~300-person company. Employees ask handbook questions; answers are grounded in ~500 pages of policies with citations.
 
-**Spec:** see `proposal.md` (Draft v2). That document is the source of truth for architecture, data model, API, concurrency, and tradeoffs.
+**Spec:** `spec.md` is the testable contract (ACs + quality gates). `proposal.md` (Draft v3) is the design reference for architecture, data model, API, concurrency, and tradeoffs.
 
 ## Stack (v1)
 
@@ -32,6 +32,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 
 ## Key paths (when they exist)
 
+- `spec.md` — acceptance criteria and quality gates
 - `proposal.md` — full design
 - `docs/best-practices.md` — AI-assisted development practices for this repo
 - `docs/failure-log.md` — recurring agent/env failure patterns

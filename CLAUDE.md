@@ -58,6 +58,7 @@ Internal RAG assistant for a ~300-person company. Employees ask handbook questio
 - `spec.md` — acceptance criteria and quality gates
 - `proposal.md` — full design
 - `docs/best-practices.md` — AI-assisted development practices for this repo
+- `docs/claude-use.md` — Claude Code + Claude API usage (CLI, streaming, Context7 ids)
 - `docs/failure-log.md` — recurring agent/env failure patterns
 - `.claude/skills/` — repeatable workflows (`/review`, `/verify`, `/handoff`)
 - `.claude/settings.json` — shared permissions and hooks

@@ -1,8 +1,30 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Ask the Handbook
 
 Internal RAG assistant for a ~300-person company. Employees ask handbook questions; answers are grounded in ~500 pages of policies with citations.
 
 **Spec:** `spec.md` is the testable contract (ACs + quality gates). `proposal.md` (Draft v3) is the design reference for architecture, data model, API, concurrency, and tradeoffs.
+
+**Status:** pre-code. No Go module, Makefile, or cmd/internal packages yet. Commands below are the spec's targets and will fail until those exist.
+
+## Commands (from spec.md quality gates)
+
+- Unit + race (every code change): `go test ./...` and `go test -race ./...`
+- Single test: `go test ./internal/retrieval -run AudienceFilter -v` (the privacy gate)
+- Golden evals (chunking/prompt/model/ingest changes): `make eval` or `go run ./cmd/eval -set testdata/golden/v1.json`. Must pass recall@5 ≥ 0.8 and correct-decline ≥ 0.95.
+- Privacy gate: `make test-privacy`
+- Ask-path smoke: `./scripts/smoke-ask.sh`
+
+## Architecture (read proposal.md §3, §6, §7, §13 before changing retrieval or concurrency)
+
+- **Online ask path** is synchronous and streamed over SSE: SSO identity → audiences → query rewrite → hybrid retrieval (vector + full-text, RRF) filtered by audience → decline without calling the LLM if retrieval is weak → grounded prompt → cited answer.
+- **Access control is enforced in retrieval SQL, default-deny.** A document with no `document_audiences` rows never appears in search. The prompt is never a security boundary.
+- **Offline ingest** goes through `ingestion_jobs` (`FOR UPDATE SKIP LOCKED` / River). New versions create new chunks, then flip `is_current` in one transaction. Old chunks are kept for audit but excluded from search.
+- **Concurrency:** goroutines live inside a request only for independent I/O, derive from `r.Context()`, and are joined before return. Every goroutine must be bounded (`errgroup`, semaphore) and have an owner. Async is limited to ingestion, scheduled jobs, Slack acks, and best-effort logs.
+- **Fallback chain:** hosted Anthropic API → local Ollama/MLX (limited concurrency) → retrieval-only.
 
 ## Stack (v1)
 

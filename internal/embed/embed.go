@@ -33,6 +33,9 @@ func NewHash(dim int) *Hash { return &Hash{Dim: dim} }
 
 // Embed implements Embedder.
 func (h *Hash) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	if h.Dim <= 0 {
+		return nil, errors.New("hash embed: dimension must be positive")
+	}
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
 		out[i] = h.one(t)

@@ -158,7 +158,14 @@ func Summarize(items []Item, obs []Observed) Report {
 	var r Report
 	for i, it := range items {
 		if i >= len(obs) {
+			// A missing observation is a miss, not a skipped item: it must count in the denominator.
 			r.Failures = append(r.Failures, it.ID+": no observation")
+			if it.ExpectOutcome == "answered" {
+				r.AnswerableN++
+			}
+			if IsDeclineClass(it.ExpectOutcome) {
+				r.DeclineN++
+			}
 			continue
 		}
 		o := obs[i]

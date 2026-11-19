@@ -39,6 +39,9 @@ func Fuse(limit int, lists ...[]Candidate) []Candidate {
 		return order[i].first < order[j].first
 	})
 
+	if limit < 0 {
+		limit = 0
+	}
 	if limit > len(order) {
 		limit = len(order)
 	}

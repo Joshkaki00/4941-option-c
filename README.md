@@ -18,11 +18,14 @@ make env                 # create .env from .env.example
 make ingest              # load testdata/handbook into Postgres
 make run-dev             # retrieval-only server on :8080, no LLM key needed
 make smoke               # end-to-end checks against the running server
+make stop                # stop the server, then confirm :8080 is free
 ```
 
 Local defaults use the Unix socket and your OS user: `DATABASE_URL=postgres:///handbook` and `TEST_DATABASE_URL=postgres:///handbook_test`. Override them in `.env`.
 
 With an Anthropic key, set `ANTHROPIC_API_KEY` in `.env` and run `make run` instead of `make run-dev`.
+
+`make stop` sends SIGTERM to the server recorded in `logs/server.pid` and to any other handbook server on port 8080. It never sends SIGKILL. If another program holds port 8080, it reports that process and leaves it running. Logs go to `logs/server.log` when the server is started by `/serve`.
 
 ## Configuration
 

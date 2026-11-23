@@ -9,7 +9,7 @@ DATABASE_URL      ?= postgres:///handbook
 TEST_DATABASE_URL ?= postgres:///handbook_test
 export DATABASE_URL TEST_DATABASE_URL
 
-.PHONY: test race vet test-privacy eval eval-retrieval ingest run run-dev smoke env
+.PHONY: test race vet test-privacy eval eval-retrieval ingest run run-dev smoke env stop
 
 test:
 	go test ./...
@@ -40,6 +40,10 @@ run-dev:
 
 smoke:
 	./scripts/smoke-ask.sh
+
+# Stop the handbook server (the one /serve started, or any left on :8080 by `make run`).
+stop:
+	./scripts/stop-server.sh
 
 # Create .env from the example if missing.
 env:
